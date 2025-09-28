@@ -5,21 +5,16 @@ use std::{
     sync::Arc,
 };
 
-pub fn get_static_file_content<'a>(
-    route: &str,
-    folder: (&'a str, &'a String),
-) -> (Arc<String>, String) {
+pub fn get_static_file_content<'a>(route: &str, folder: &String) -> (Arc<String>, String) {
     let file_relative_path = route
-        .strip_prefix(folder.0)
+        .strip_prefix(folder)
         .unwrap_or(route)
-        .trim_start_matches('/');
+        .trim_start_matches('/')
+        .split('/')
+        .collect::<Vec<_>>()[1];
 
-    let folder_path = Path::new(&folder.1).components().collect::<PathBuf>();
-
+    let folder_path = Path::new(&folder).components().collect::<PathBuf>();
     let file_path = folder_path.join(file_relative_path);
-
-    println!("Looking for file at: {:?}", file_path.as_path());
-
     let content_type = match file_path.extension().and_then(|e| e.to_str()) {
         Some("css") => "text/css",
         Some("js") => "application/javascript",

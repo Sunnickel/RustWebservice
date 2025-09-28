@@ -1,28 +1,22 @@
 use crate::webserver::files::get_static_file_content;
-use crate::webserver::responses::{generate_response, generate_static_response};
+use crate::webserver::responses::{generate_response, generate_static_response, Response};
+use crate::webserver::{Domain, DomainRoutes};
+use chrono::Utc;
+use log::trace;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::string::ToString;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-pub struct Client<'a> {
+pub struct Client {
     stream: TcpStream,
-    routes: &'a HashMap<String, Arc<dyn Fn() -> String + Send + Sync + 'static>>,
-    static_routes: &'a HashMap<String, String>,
+    domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
 }
 
-impl<'a> Client<'a> {
-    pub fn new(
-        stream: TcpStream,
-        routes: &'a HashMap<String, Arc<dyn Fn() -> String + Send + Sync + 'static>>,
-        static_routes: &'a HashMap<String, String>,
-    ) -> Self {
-        Self {
-            stream,
-            routes,
-            static_routes,
-        }
+impl Client {
+    pub fn new(stream: TcpStream, domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>) -> Self {
+        Self { stream, domains }
     }
 
     pub fn handle(&mut self) {
@@ -47,20 +41,44 @@ impl<'a> Client<'a> {
     }
 
     fn handle_routing(&mut self, request: String) -> String {
-        let max = extract_method_and_route(&request);
-        println!("{max:?}");
+        let (method, route) = match extract_method_and_route(&request) {
+            Some(v) => v,
+            None => return "".to_string(),
+        };
 
-        if let Some((_method, route)) = max {
-            if let Some(folder) = find_static_folder(self.static_routes, route) {
+        let host = extract_host(&request);
+        let guard = self.domains.lock().unwrap();
+
+        let domain_routes = guard
+            .get(&Domain::new(&host))
+            .or_else(|| guard.get(&Domain::new("")));
+
+        if let Some(domain_routes) = domain_routes {
+            trace!(
+                "[{}]: {} {} on {}",
+                Utc::now().format("%Y-%m-%d %H:%M:%S"),
+                method,
+                route,
+                host
+            );
+            if let Some(handler) = domain_routes.custom_routes.get(route) {
+                handler(request)
+            } else if let Some((_prefix, folder)) =
+                find_static_folder(&domain_routes.static_routes, route)
+            {
                 let (content, content_type) = get_static_file_content(&route, folder);
-                generate_static_response(&*content, &*content_type)
-            } else if let Some(handler) = self.routes.get(route) {
+                generate_static_response(&mut Response::new(content), &*content_type)
+            } else if let Some(handler) = domain_routes.routes.get(route) {
                 handler()
             } else {
-                generate_response("<h1>404 Not Found</h1>")
+                generate_response(&mut Response::new(Arc::from(
+                    "<h1>404 Not Found</h1>".to_string(),
+                )))
             }
         } else {
-            "".to_string()
+            generate_response(&mut Response::new(Arc::from(
+                "<h1>404 Domain Not Found</h1>".to_string(),
+            )))
         }
     }
 
@@ -76,6 +94,15 @@ fn extract_method_and_route(request: &str) -> Option<(&str, &str)> {
         let route = parts.next()?;
         Some((method, route))
     })
+}
+
+fn extract_host(request: &str) -> String {
+    for line in request.lines() {
+        if line.to_lowercase().starts_with("host:") {
+            return line[5..].trim().to_string();
+        }
+    }
+    "".to_string()
 }
 
 fn find_static_folder<'a>(
