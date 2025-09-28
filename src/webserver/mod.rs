@@ -4,7 +4,7 @@ pub(crate) mod responses;
 
 use crate::webserver::client_handling::Client;
 use crate::webserver::files::get_file_content;
-use crate::webserver::responses::{generate_response, Response};
+use crate::webserver::responses::{Response, generate_response};
 use log::info;
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-#[derive(Hash, PartialEq, Eq, Clone)]
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub struct Domain {
     pub name: String,
 }
@@ -27,7 +27,7 @@ impl Domain {
 
 #[derive(Clone)]
 pub struct DomainRoutes {
-    pub routes: HashMap<String, Arc<dyn Fn() -> String + Send + Sync + 'static>>,
+    pub routes: HashMap<String, String>,
     pub static_routes: HashMap<String, String>,
     pub custom_routes: HashMap<String, Arc<dyn Fn(String) -> String + Send + Sync>>,
 }
@@ -83,8 +83,9 @@ impl WebServer {
         }
     }
 
-    pub fn add_subdomain_server(&mut self, domain: Domain) {
+    pub fn add_subdomain_server(&mut self, mut domain: Domain) {
         let mut guard = self.domains.lock().unwrap();
+        domain.name = domain.name.to_lowercase();
         guard.entry(domain).or_insert_with(DomainRoutes::new);
     }
 
@@ -94,13 +95,12 @@ impl WebServer {
         }
 
         let content = get_file_content(&PathBuf::from(file_path));
-        let handler =
-            Arc::new(move || generate_response(&Response::new(Arc::from(content.to_string()))));
+        let response: String = generate_response(&Response::new(Arc::from(content.to_string())));
 
         let domain_key = domain.unwrap().name.to_string();
         let mut guard = self.domains.lock().unwrap();
         if let Some(domain_routes) = guard.get_mut(&Domain::new(&*domain_key)) {
-            domain_routes.routes.insert(route.to_string(), handler);
+            domain_routes.routes.insert(route.to_string(), response);
         } else {
             panic!("Domain not found: {}", domain_key);
         }

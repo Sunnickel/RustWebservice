@@ -1,5 +1,5 @@
 use crate::webserver::files::get_static_file_content;
-use crate::webserver::responses::{generate_response, generate_static_response, Response};
+use crate::webserver::responses::{Response, generate_response, generate_static_response};
 use crate::webserver::{Domain, DomainRoutes};
 use chrono::Utc;
 use log::trace;
@@ -50,7 +50,7 @@ impl Client {
         let guard = self.domains.lock().unwrap();
 
         let domain_routes = guard
-            .get(&Domain::new(&host))
+            .get(&Domain::new(&host.split(".").collect::<Vec<_>>()[0]))
             .or_else(|| guard.get(&Domain::new("")));
 
         if let Some(domain_routes) = domain_routes {
@@ -68,8 +68,8 @@ impl Client {
             {
                 let (content, content_type) = get_static_file_content(&route, folder);
                 generate_static_response(&mut Response::new(content), &*content_type)
-            } else if let Some(handler) = domain_routes.routes.get(route) {
-                handler()
+            } else if domain_routes.routes.contains_key(route) {
+                domain_routes.routes.get(route).unwrap().to_string()
             } else {
                 generate_response(&mut Response::new(Arc::from(
                     "<h1>404 Not Found</h1>".to_string(),

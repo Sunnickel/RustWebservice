@@ -1,4 +1,4 @@
-use crate::webserver::responses::{generate_response, Response};
+use crate::webserver::responses::{Response, generate_response};
 use crate::webserver::{Domain, WebServer};
 use log::LevelFilter;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ fn main() {
 
     let mut server = WebServer::new([0, 0, 0, 0], 80);
 
-    let api = Domain::new("API");
+    let api = Domain::new("api");
     server.add_subdomain_server(api.clone());
 
     server.add_route_file("/", "./resources/templates/index.html", Some(api));
