@@ -1,5 +1,6 @@
 use crate::webserver::files::get_static_file_content;
-use crate::webserver::responses::{Response, generate_response, generate_static_response};
+use crate::webserver::responses::ResponseCodes;
+use crate::webserver::responses::{generate_response, generate_static_response, Response};
 use crate::webserver::{Domain, DomainRoutes};
 use chrono::Utc;
 use log::trace;
@@ -67,18 +68,18 @@ impl Client {
                 find_static_folder(&domain_routes.static_routes, route)
             {
                 let (content, content_type) = get_static_file_content(&route, folder);
-                generate_static_response(&mut Response::new(content), &*content_type)
-            } else if domain_routes.routes.contains_key(route) {
-                domain_routes.routes.get(route).unwrap().to_string()
+                generate_static_response(&mut Response::new(content, None), &*content_type)
+            } else if let Some(resp) = domain_routes.routes.get(route) {
+                generate_response(&mut Response::new(Arc::from(resp.clone()), Some(ResponseCodes::Ok)))
             } else {
                 generate_response(&mut Response::new(Arc::from(
-                    "<h1>404 Not Found</h1>".to_string(),
-                )))
+                    "<h1>404 Not Found</h1>".to_string()
+                ), Some(ResponseCodes::NotFound)))
             }
         } else {
             generate_response(&mut Response::new(Arc::from(
                 "<h1>404 Domain Not Found</h1>".to_string(),
-            )))
+            ), Some(ResponseCodes::NotFound)))
         }
     }
 

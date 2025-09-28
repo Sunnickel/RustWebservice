@@ -1,6 +1,6 @@
 mod response_codes;
 
-use crate::webserver::responses::response_codes::ResponseCodes;
+pub(crate) use crate::webserver::responses::response_codes::ResponseCodes;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,24 +28,26 @@ impl Response {
     }
 
     pub fn header_to_string(&self) -> String {
-        let mut output: String = String::from("");
-
-        for (key, value) in &self.headers {
-            output.push_str(&format!("{}: {}\r\n", key, value));
-        }
+        let mut output = self.headers.iter()
+            .map(|(k, v)| format!("{}: {}\r\n", k, v))
+            .collect::<String>();
         output.push_str("\r\n");
         output
     }
 
     pub fn set_status_code(&mut self, status_code: ResponseCodes) {
-        self.headers.insert(String::from("HTTP/1.1"), format!("{} {}", status_code., status_code.as_str()));
+        self.status_code = status_code;
     }
 }
 
 pub fn generate_response(response: &Response) -> String {
-    let output =
+    let mut output = format!(
+        "HTTP/1.1 {} {}\r\n",
+        response.status_code as u16,
+        response.status_code.as_str()
+    );
 
-    output.push_str(&*response.header_to_string());
+    output.push_str(&response.header_to_string());
     output.push_str(&*response.content);
     output
 }
@@ -53,6 +55,6 @@ pub fn generate_response(response: &Response) -> String {
 pub fn generate_static_response(response: &mut Response, content_type: &str) -> String {
     response
         .headers
-        .insert(String::from("Content-Type"), content_type.to_string());
+        .insert("Content-Type".to_string(), content_type.to_string());
     generate_response(response)
 }

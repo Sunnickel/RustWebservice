@@ -95,7 +95,7 @@ impl WebServer {
         }
 
         let content = get_file_content(&PathBuf::from(file_path));
-        let response: String = generate_response(&Response::new(Arc::from(content.to_string())));
+        let response: String = generate_response(&Response::new(Arc::from(content.to_string()), None));
 
         let domain_key = domain.unwrap().name.to_string();
         let mut guard = self.domains.lock().unwrap();

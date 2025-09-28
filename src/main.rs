@@ -1,4 +1,4 @@
-use crate::webserver::responses::{Response, generate_response};
+use crate::webserver::responses::{generate_response, Response};
 use crate::webserver::{Domain, WebServer};
 use log::LevelFilter;
 use std::sync::Arc;
@@ -25,6 +25,6 @@ fn main() {
 }
 
 fn custom_route(_request: String) -> String {
-    let response = Response::new(Arc::new(String::from("<p> Custom Thingie </p>")));
+    let response = Response::new(Arc::new(String::from("<p> Custom Thingie </p>")), None);
     generate_response(&response)
 }

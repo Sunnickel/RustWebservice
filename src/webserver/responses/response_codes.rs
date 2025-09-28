@@ -1,5 +1,4 @@
-use std::fmt::{Display, Formatter};
-
+#[derive(Clone, Copy)]
 pub enum ResponseCodes {
     // 1xx Informational
     Continue = 100,
