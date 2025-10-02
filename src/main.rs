@@ -18,11 +18,21 @@ fn main() {
     let api = Domain::new("api");
     server.add_subdomain_router(api.clone());
 
-    server.add_route_file("/", "./resources/templates/index.html", Some(api.clone()));
-    server.add_route_file("/", "./resources/templates/index.html", None);
-    server.add_custom_route("/custom", custom_route, None);
-    server.add_static_route("/static", "./resources/static", None);
-    server.add_static_route("/static", "./resources/static", Some(api.clone()));
+    server
+        .add_route_file("/", "./resources/templates/index.html", Some(api.clone()))
+        .unwrap();
+    server
+        .add_route_file("/", "./resources/templates/index.html", None)
+        .unwrap();
+    server
+        .add_custom_route("/custom", custom_route, None)
+        .unwrap();
+    server
+        .add_static_route("/static", "./resources/static", None)
+        .unwrap();
+    server
+        .add_static_route("/static", "./resources/static", Some(api.clone()))
+        .unwrap();
     server.start();
 }
 

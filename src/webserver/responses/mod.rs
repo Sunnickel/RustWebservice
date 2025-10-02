@@ -79,10 +79,6 @@ impl Response {
         Self { headers, content }
     }
 
-    pub fn set_status_code(&mut self, status_code: ResponseCodes) {
-        self.headers.status = status_code;
-    }
-
     pub fn as_str(&self) -> String {
         let mut output = String::from(self.headers.as_str());
         output.push_str(self.content.as_str());

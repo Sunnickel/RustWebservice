@@ -29,7 +29,6 @@ impl Request {
     }
 
     pub fn get_cookies(&self) -> Option<HashMap<&str, &str>> {
-        // More efficient cookie parsing
         let cookie_str = self.values.get("cookie")?;
 
         let mut cookies = HashMap::new();
