@@ -21,14 +21,12 @@ use std::thread;
 pub struct Domain {
     pub name: String,
 }
-
 impl Domain {
     pub fn new(name: &str) -> Domain {
         Self {
             name: name.to_string(),
         }
     }
-
     pub fn from(name: &str) -> Domain {
         Self {
             name: name.to_string(),
@@ -54,7 +52,7 @@ impl DomainRoutes {
 }
 
 pub struct WebServer {
-    pub(crate) host: [u8; 4],
+    pub host: [u8; 4],
     pub port: u16,
     pub domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
     pub default_domain: Domain,
@@ -86,10 +84,8 @@ impl WebServer {
             "{}.{}.{}.{}:{}",
             self.host[0], self.host[1], self.host[2], self.host[3], self.port
         );
-
         let listener = TcpListener::bind(&bind_addr).unwrap();
         info!("Server running on http://{bind_addr}/");
-
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -111,42 +107,65 @@ impl WebServer {
         guard.entry(domain).or_insert_with(DomainRoutes::new);
     }
 
-    pub fn add_route_file(&mut self, route: &str, file_path: &str, mut domain: Option<Domain>) {
-        if domain.is_none() {
-            domain = Some(self.default_domain.clone());
-        }
-
+    pub fn add_route_file(
+        &mut self,
+        route: &str,
+        file_path: &str,
+        domain: Option<Domain>,
+    ) -> Result<(), String> {
+        let domain = domain.unwrap_or_else(|| self.default_domain.clone());
         let content = get_file_content(&PathBuf::from(file_path));
 
-        let domain_key: String = domain.unwrap().name.to_string();
         let mut guard = self.domains.lock().unwrap();
-        if let Some(domain_routes) = guard.get_mut(&Domain::new(&*domain_key)) {
-            domain_routes
-                .routes
-                .insert(route.to_string(), content.to_string());
-        } else {
-            panic!("Domain not found: {}", domain_key);
+
+        if !guard.contains_key(&domain) {
+            guard.insert(domain.clone(), DomainRoutes::new());
+        }
+
+        match guard.get_mut(&domain) {
+            Some(domain_routes) => {
+                domain_routes
+                    .routes
+                    .insert(route.to_string(), content.to_string());
+                Ok(())
+            }
+            None => Err(format!(
+                "Failed to add route file for domain: {}",
+                domain.name
+            )),
         }
     }
 
-    pub fn add_static_route(&mut self, route: &str, folder: &str, mut domain: Option<Domain>) {
-        if domain.is_none() {
-            domain = Some(self.default_domain.clone());
-        }
-
+    pub fn add_static_route(
+        &mut self,
+        route: &str,
+        folder: &str,
+        domain: Option<Domain>,
+    ) -> Result<(), String> {
+        let domain = domain.unwrap_or_else(|| self.default_domain.clone());
         let folder_path = PathBuf::from(folder);
+
         if !folder_path.exists() {
-            panic!("Folder doesn't exist: {}", folder);
+            return Err(format!("Folder doesn't exist: {}", folder));
         }
 
-        let domain_key: String = domain.unwrap().name.to_string();
         let mut guard = self.domains.lock().unwrap();
-        if let Some(domain_routes) = guard.get_mut(&Domain::new(&*domain_key)) {
-            domain_routes
-                .static_routes
-                .insert(route.to_string(), folder.to_string());
-        } else {
-            panic!("Domain not found: {}", domain_key);
+
+        if !guard.contains_key(&domain) {
+            guard.insert(domain.clone(), DomainRoutes::new());
+        }
+
+        match guard.get_mut(&domain) {
+            Some(domain_routes) => {
+                domain_routes
+                    .static_routes
+                    .insert(route.to_string(), folder.to_string());
+                Ok(())
+            }
+            None => Err(format!(
+                "Failed to add static route for domain: {}",
+                domain.name
+            )),
         }
     }
 
@@ -155,17 +174,17 @@ impl WebServer {
         route: &str,
         f: impl Fn(Request) -> Response + Send + Sync + 'static,
         domain: Option<Domain>,
-    ) {
-        let domain: Domain = domain.unwrap_or_else(|| Domain::new(""));
+    ) -> Result<(), String> {
+        let domain = domain.unwrap_or_else(|| Domain::new(""));
 
-        let mut guard = self.domains.lock().unwrap();
-
-        if let Some(domain_routes) = guard.get_mut(&domain) {
-            domain_routes
-                .custom_routes
-                .insert(route.to_string(), Arc::new(f));
-        } else {
-            panic!("Domain not found: {}", domain.name);
+        match self.domains.lock().unwrap().get_mut(&domain) {
+            Some(domain_routes) => {
+                domain_routes
+                    .custom_routes
+                    .insert(route.to_string(), Arc::new(f));
+                Ok(())
+            }
+            None => Err(format!("Domain not found: {}", domain.name)),
         }
     }
 

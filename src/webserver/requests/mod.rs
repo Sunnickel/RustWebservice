@@ -15,14 +15,9 @@ impl Request {
         let request_line = lines.next()?;
         let (method, route, protocol) = parse_request_line(request_line)?;
 
-        let values = lines
+        let values: HashMap<String, String> = lines
             .filter_map(|line| line.split_once(':'))
-            .map(|(key, value)| {
-                (
-                    key.trim().to_lowercase().to_string(),
-                    value.trim().to_string(),
-                )
-            })
+            .map(|(key, value)| (key.trim().to_lowercase(), value.trim().to_string()))
             .collect();
 
         Some(Self {
@@ -34,21 +29,16 @@ impl Request {
     }
 
     pub fn get_cookies(&self) -> Option<HashMap<&str, &str>> {
-        let mut cookies = HashMap::new();
-        let mut cookie_string: Option<&String>;
+        // More efficient cookie parsing
+        let cookie_str = self.values.get("cookie")?;
 
-        if self.values.contains_key("cookies") {
-            for cookie in self.values.get("cookies").unwrap().split(';') {
-                cookie_string = self.values.get(cookie);
-                if cookie_string.is_some() {
-                    let cookie_pair = cookie_string.unwrap().splitn(2, '=').collect::<Vec<_>>();
-                    cookies.insert(cookie_pair[0], cookie_pair[1]);
-                }
+        let mut cookies = HashMap::new();
+        for cookie_pair in cookie_str.split(';') {
+            if let Some((key, value)) = cookie_pair.trim().split_once('=') {
+                cookies.insert(key, value);
             }
-            Some(cookies)
-        } else {
-            return None;
         }
+        Some(cookies)
     }
 }
 
