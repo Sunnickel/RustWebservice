@@ -8,7 +8,9 @@ use crate::webserver::client_handling::Client;
 use crate::webserver::files::get_file_content;
 use crate::webserver::middleware::Middleware;
 use crate::webserver::requests::Request;
-use log::info;
+use crate::webserver::responses::Response;
+use chrono::Utc;
+use log::{info, trace};
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -38,7 +40,7 @@ impl Domain {
 pub struct DomainRoutes {
     pub routes: HashMap<String, String>,
     pub static_routes: HashMap<String, String>,
-    pub custom_routes: HashMap<String, Arc<dyn Fn(Request) -> String + Send + Sync>>,
+    pub custom_routes: HashMap<String, Arc<dyn Fn(Request) -> Response + Send + Sync>>,
 }
 
 impl DomainRoutes {
@@ -66,9 +68,9 @@ impl WebServer {
         domains.insert(default_domain.clone(), DomainRoutes::new());
 
         let mut middlewares = Vec::new();
-        let middleware = Middleware::new_both(None, None, move |x| x.clone(), move |x1| x1.clone());
+        let logging_middleware = Middleware::new_response_both(None, None, Self::logging);
 
-        middlewares.push(middleware);
+        middlewares.push(logging_middleware);
 
         WebServer {
             host,
@@ -92,8 +94,9 @@ impl WebServer {
             match stream {
                 Ok(stream) => {
                     let domains = Arc::clone(&self.domains);
+                    let middleware = Arc::clone(&self.middleware);
                     thread::spawn(move || {
-                        let mut client: Client = Client::new(stream, domains);
+                        let mut client: Client = Client::new(stream, domains, middleware);
                         client.handle();
                     });
                 }
@@ -102,7 +105,7 @@ impl WebServer {
         }
     }
 
-    pub fn add_subdomain_server(&mut self, mut domain: Domain) {
+    pub fn add_subdomain_router(&mut self, mut domain: Domain) {
         let mut guard = self.domains.lock().unwrap();
         domain.name = domain.name.to_lowercase();
         guard.entry(domain).or_insert_with(DomainRoutes::new);
@@ -115,7 +118,7 @@ impl WebServer {
 
         let content = get_file_content(&PathBuf::from(file_path));
 
-        let domain_key = domain.unwrap().name.to_string();
+        let domain_key: String = domain.unwrap().name.to_string();
         let mut guard = self.domains.lock().unwrap();
         if let Some(domain_routes) = guard.get_mut(&Domain::new(&*domain_key)) {
             domain_routes
@@ -136,7 +139,7 @@ impl WebServer {
             panic!("Folder doesn't exist: {}", folder);
         }
 
-        let domain_key = domain.unwrap().name.to_string();
+        let domain_key: String = domain.unwrap().name.to_string();
         let mut guard = self.domains.lock().unwrap();
         if let Some(domain_routes) = guard.get_mut(&Domain::new(&*domain_key)) {
             domain_routes
@@ -150,10 +153,10 @@ impl WebServer {
     pub fn add_custom_route(
         &self,
         route: &str,
-        f: impl Fn(Request) -> String + Send + Sync + 'static,
+        f: impl Fn(Request) -> Response + Send + Sync + 'static,
         domain: Option<Domain>,
     ) {
-        let domain = domain.unwrap_or_else(|| Domain::new(""));
+        let domain: Domain = domain.unwrap_or_else(|| Domain::new(""));
 
         let mut guard = self.domains.lock().unwrap();
 
@@ -164,5 +167,20 @@ impl WebServer {
         } else {
             panic!("Domain not found: {}", domain.name);
         }
+    }
+
+    pub fn logging(request: &mut Request, response: Response) -> Response {
+        trace!(
+            "[{}] {:<6} {:<30} -> {:3} (host: {})",
+            Utc::now().format("%Y-%m-%d %H:%M:%S"),
+            request.method,
+            request.route,
+            response.headers.get_status_code(),
+            request
+                .values
+                .get("host")
+                .unwrap_or(&"<unknown>".to_string())
+        );
+        response
     }
 }

@@ -1,5 +1,5 @@
 use crate::webserver::requests::Request;
-use crate::webserver::responses::{generate_response, Response};
+use crate::webserver::responses::Response;
 use crate::webserver::{Domain, WebServer};
 use log::LevelFilter;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ fn main() {
     let mut server = WebServer::new([0, 0, 0, 0], 80);
 
     let api = Domain::new("api");
-    server.add_subdomain_server(api.clone());
+    server.add_subdomain_router(api.clone());
 
     server.add_route_file("/", "./resources/templates/index.html", Some(api.clone()));
     server.add_route_file("/", "./resources/templates/index.html", None);
@@ -26,7 +26,7 @@ fn main() {
     server.start();
 }
 
-fn custom_route(_request: Request) -> String {
+fn custom_route(_request: Request) -> Response {
     let response = Response::new(Arc::new(String::from("<p> Custom Thing </p>")), None, None);
-    generate_response(&response)
+    response
 }

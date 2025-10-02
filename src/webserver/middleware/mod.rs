@@ -1,11 +1,12 @@
+use crate::webserver::Domain;
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
-use crate::webserver::Domain;
 
 pub enum MiddlewareFn {
     Request(fn(&mut Request)),
     Response(fn(&mut Response)),
-    Both(fn(&mut Request) -> Request, fn(&mut Response) -> Response),
+    BothResponse(fn(&mut Request, Response) -> Response),
+    Both(fn(Request) -> Request, fn(Response) -> Response),
 }
 
 pub struct Middleware {
@@ -20,7 +21,7 @@ impl Middleware {
         route: Option<String>,
         f: fn(&mut Request),
     ) -> Middleware {
-        Middleware {
+        Self {
             domain: Some(domain.unwrap_or_else(|| Domain::from("*"))),
             route: Some(route.unwrap_or_else(|| "*".to_string())),
             f: MiddlewareFn::Request(f),
@@ -32,7 +33,7 @@ impl Middleware {
         route: Option<String>,
         f: fn(&mut Response),
     ) -> Middleware {
-        Middleware {
+        Self {
             domain: Some(domain.unwrap_or_else(|| Domain::from("*"))),
             route: Some(route.unwrap_or_else(|| "*".to_string())),
             f: MiddlewareFn::Response(f),
@@ -42,13 +43,25 @@ impl Middleware {
     pub fn new_both(
         domain: Option<Domain>,
         route: Option<String>,
-        f_req: fn(&mut Request) -> Request,
-        f_res: fn(&mut Response) -> Response,
+        f_req: fn(Request) -> Request,
+        f_res: fn(Response) -> Response,
     ) -> Middleware {
-        Middleware {
+        Self {
             domain: Some(domain.unwrap_or_else(|| Domain::from("*"))),
             route: Some(route.unwrap_or_else(|| "*".to_string())),
             f: MiddlewareFn::Both(f_req, f_res),
+        }
+    }
+
+    pub fn new_response_both(
+        domain: Option<Domain>,
+        route: Option<String>,
+        f: fn(&mut Request, Response) -> Response,
+    ) -> Middleware {
+        Self {
+            domain,
+            route,
+            f: MiddlewareFn::BothResponse(f),
         }
     }
 }

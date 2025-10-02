@@ -48,6 +48,10 @@ impl ResponseHeaders {
         output.push_str("\r\n");
         output
     }
+
+    pub fn get_status_code(&self) -> u16 {
+        self.status.as_u16()
+    }
 }
 
 impl Response {
@@ -57,7 +61,7 @@ impl Response {
         mut protocol: Option<String>,
     ) -> Response {
         if protocol.is_none() {
-            protocol = Some(String::from("HTTP/1.1"))
+            protocol = Some(String::from("HTTP/2"))
         }
         if code.is_none() {
             code = Some(ResponseCodes::Ok);
@@ -84,18 +88,4 @@ impl Response {
         output.push_str(self.content.as_str());
         output
     }
-}
-
-pub fn generate_response(response: &Response) -> String {
-    let mut output: String = response.headers.as_str();
-    output.push_str(&*response.content);
-    output
-}
-
-pub fn generate_static_response(response: &mut Response, content_type: &str) -> String {
-    response
-        .headers
-        .values
-        .insert("Content-Type".to_string(), content_type.to_string());
-    generate_response(response)
 }
