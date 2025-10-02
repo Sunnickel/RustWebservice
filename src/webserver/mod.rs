@@ -1,10 +1,13 @@
 mod client_handling;
 mod files;
+mod middleware;
+pub(crate) mod requests;
 pub(crate) mod responses;
 
 use crate::webserver::client_handling::Client;
 use crate::webserver::files::get_file_content;
-use crate::webserver::responses::{Response, generate_response};
+use crate::webserver::middleware::Middleware;
+use crate::webserver::requests::Request;
 use log::info;
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -23,13 +26,19 @@ impl Domain {
             name: name.to_string(),
         }
     }
+
+    pub fn from(name: &str) -> Domain {
+        Self {
+            name: name.to_string(),
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct DomainRoutes {
     pub routes: HashMap<String, String>,
     pub static_routes: HashMap<String, String>,
-    pub custom_routes: HashMap<String, Arc<dyn Fn(String) -> String + Send + Sync>>,
+    pub custom_routes: HashMap<String, Arc<dyn Fn(Request) -> String + Send + Sync>>,
 }
 
 impl DomainRoutes {
@@ -46,17 +55,27 @@ pub struct WebServer {
     pub(crate) host: [u8; 4],
     pub port: u16,
     pub domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+    pub default_domain: Domain,
+    pub middleware: Arc<Vec<Middleware>>,
 }
 
 impl WebServer {
     pub fn new(host: [u8; 4], port: u16) -> WebServer {
         let mut domains = HashMap::new();
-        domains.insert(Domain::new(""), DomainRoutes::new());
+        let default_domain = Domain::new("");
+        domains.insert(default_domain.clone(), DomainRoutes::new());
+
+        let mut middlewares = Vec::new();
+        let middleware = Middleware::new_both(None, None, move |x| x.clone(), move |x1| x1.clone());
+
+        middlewares.push(middleware);
 
         WebServer {
             host,
             port,
             domains: Arc::new(Mutex::new(domains)),
+            middleware: Arc::from(middlewares),
+            default_domain,
         }
     }
 
@@ -91,16 +110,17 @@ impl WebServer {
 
     pub fn add_route_file(&mut self, route: &str, file_path: &str, mut domain: Option<Domain>) {
         if domain.is_none() {
-            domain = Some(Domain::new(""));
+            domain = Some(self.default_domain.clone());
         }
 
         let content = get_file_content(&PathBuf::from(file_path));
-        let response: String = generate_response(&Response::new(Arc::from(content.to_string()), None));
 
         let domain_key = domain.unwrap().name.to_string();
         let mut guard = self.domains.lock().unwrap();
         if let Some(domain_routes) = guard.get_mut(&Domain::new(&*domain_key)) {
-            domain_routes.routes.insert(route.to_string(), response);
+            domain_routes
+                .routes
+                .insert(route.to_string(), content.to_string());
         } else {
             panic!("Domain not found: {}", domain_key);
         }
@@ -108,7 +128,7 @@ impl WebServer {
 
     pub fn add_static_route(&mut self, route: &str, folder: &str, mut domain: Option<Domain>) {
         if domain.is_none() {
-            domain = Some(Domain::new(""));
+            domain = Some(self.default_domain.clone());
         }
 
         let folder_path = PathBuf::from(folder);
@@ -130,7 +150,7 @@ impl WebServer {
     pub fn add_custom_route(
         &self,
         route: &str,
-        f: impl Fn(String) -> String + Send + Sync + 'static,
+        f: impl Fn(Request) -> String + Send + Sync + 'static,
         domain: Option<Domain>,
     ) {
         let domain = domain.unwrap_or_else(|| Domain::new(""));

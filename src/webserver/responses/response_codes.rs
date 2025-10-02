@@ -1,4 +1,5 @@
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
+#[repr(u16)]
 pub enum ResponseCodes {
     // 1xx Informational
     Continue = 100,
@@ -64,5 +65,9 @@ impl ResponseCodes {
             ResponseCodes::ServiceUnavailable => "Service Unavailable",
             ResponseCodes::GatewayTimeout => "Gateway Timeout",
         }
+    }
+
+    pub fn as_u16(&self) -> u16 {
+        *self as u16
     }
 }

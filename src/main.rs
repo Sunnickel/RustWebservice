@@ -1,3 +1,4 @@
+use crate::webserver::requests::Request;
 use crate::webserver::responses::{generate_response, Response};
 use crate::webserver::{Domain, WebServer};
 use log::LevelFilter;
@@ -17,14 +18,15 @@ fn main() {
     let api = Domain::new("api");
     server.add_subdomain_server(api.clone());
 
-    server.add_route_file("/", "./resources/templates/index.html", Some(api));
+    server.add_route_file("/", "./resources/templates/index.html", Some(api.clone()));
     server.add_route_file("/", "./resources/templates/index.html", None);
     server.add_custom_route("/custom", custom_route, None);
     server.add_static_route("/static", "./resources/static", None);
+    server.add_static_route("/static", "./resources/static", Some(api.clone()));
     server.start();
 }
 
-fn custom_route(_request: String) -> String {
-    let response = Response::new(Arc::new(String::from("<p> Custom Thingie </p>")), None);
+fn custom_route(_request: Request) -> String {
+    let response = Response::new(Arc::new(String::from("<p> Custom Thing </p>")), None, None);
     generate_response(&response)
 }
