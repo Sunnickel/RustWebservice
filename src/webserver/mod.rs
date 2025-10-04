@@ -20,7 +20,7 @@ use crate::webserver::responses::Response;
 pub use crate::webserver::server_config::ServerConfig;
 
 use chrono::Utc;
-use log::info;
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -235,7 +235,7 @@ impl WebServer {
         route: &str,
         file_path: &str,
         domain: Option<&Domain>,
-    ) -> Result<(), String> {
+    ) -> &Self {
         let domain = domain.unwrap_or_else(|| &self.default_domain);
         let content = get_file_content(&PathBuf::from(file_path));
         let mut guard = self.domains.lock().unwrap();
@@ -247,13 +247,10 @@ impl WebServer {
                 domain_routes
                     .routes
                     .insert(route.to_string(), content.to_string());
-                Ok(())
             }
-            None => Err(format!(
-                "Failed to add route file for domain: {}",
-                domain.name
-            )),
+            None => error!("No route found for domain {}", domain.name),
         }
+        self
     }
 
     /// Adds a static file route to the specified domain.
@@ -282,11 +279,11 @@ impl WebServer {
         route: &str,
         folder: &str,
         domain: Option<&Domain>,
-    ) -> Result<(), String> {
+    ) -> &Self {
         let domain = domain.unwrap_or_else(|| &self.default_domain);
         let folder_path = PathBuf::from(folder);
         if !folder_path.exists() {
-            return Err(format!("Folder doesn't exist: {}", folder));
+            error!("Static route file does not exist");
         }
         let mut guard = self.domains.lock().unwrap();
         if !guard.contains_key(&domain) {
@@ -297,13 +294,10 @@ impl WebServer {
                 domain_routes
                     .static_routes
                     .insert(route.to_string(), folder.to_string());
-                Ok(())
             }
-            None => Err(format!(
-                "Failed to add static route for domain: {}",
-                domain.name
-            )),
+            None => error!("Domain not found: {}", domain.name),
         }
+        self
     }
 
     /// Adds a custom route handler to the specified domain.
@@ -335,17 +329,17 @@ impl WebServer {
         route: &str,
         f: impl Fn(Request, &Domain) -> Response + Send + Sync + 'static,
         domain: Option<&Domain>,
-    ) -> Result<(), String> {
+    ) -> &Self {
         let domain = domain.unwrap_or_else(|| &self.default_domain);
         match self.domains.lock().unwrap().get_mut(&domain) {
             Some(domain_routes) => {
                 domain_routes
                     .custom_routes
                     .insert(route.to_string(), Arc::new(f));
-                Ok(())
             }
-            None => Err(format!("Domain not found: {}", domain.name)),
+            None => error!("Domain not found: {}", domain.name),
         }
+        self
     }
 
     /// A logging middleware function that logs request and response details.
