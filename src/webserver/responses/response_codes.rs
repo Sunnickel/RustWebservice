@@ -74,6 +74,10 @@ pub enum ResponseCodes {
 }
 
 impl ResponseCodes {
+    pub fn equals(&self, response_codes: ResponseCodes) -> bool {
+        (self.as_u16() == response_codes.as_u16()) && (self.as_str() == response_codes.as_str())
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             // 1xx

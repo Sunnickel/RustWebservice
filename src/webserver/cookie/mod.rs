@@ -9,7 +9,7 @@ pub enum SameSite {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Cookie {
+pub struct Cookie {
     pub(crate) key: String,
     value: String,
     max_age: Option<u64>,
@@ -34,7 +34,7 @@ impl Cookie {
         }
     }
 
-    pub fn as_string(&self) -> String {
+    pub(crate) fn as_string(&self) -> String {
         let mut base = format!("{}={}; ", self.key, self.value);
 
         if let Some(seconds) = self.max_age {

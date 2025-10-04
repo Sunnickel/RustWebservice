@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-pub fn get_static_file_content<'a>(route: &str, folder: &String) -> (Arc<String>, String) {
+pub(crate) fn get_static_file_content<'a>(route: &str, folder: &String) -> (Arc<String>, String) {
     let file_relative_path = route
         .strip_prefix(folder)
         .unwrap_or(route)
@@ -28,7 +28,7 @@ pub fn get_static_file_content<'a>(route: &str, folder: &String) -> (Arc<String>
     (content, content_type.to_string())
 }
 
-pub fn get_file_content(file_path: &Path) -> Arc<String> {
+pub(crate) fn get_file_content(file_path: &Path) -> Arc<String> {
     let file =
         File::open(file_path).unwrap_or_else(|_| panic!("Could not open file: {:?}", file_path));
 

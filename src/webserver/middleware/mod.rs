@@ -10,9 +10,9 @@ pub enum MiddlewareFn {
 }
 
 pub struct Middleware {
-    pub domain: Option<Domain>,
-    pub route: Option<String>,
-    pub f: MiddlewareFn,
+    pub(crate) domain: Domain,
+    pub(crate) route: String,
+    pub(crate) f: MiddlewareFn,
 }
 
 impl Middleware {
@@ -22,8 +22,8 @@ impl Middleware {
         f: fn(&mut Request),
     ) -> Middleware {
         Self {
-            domain: Some(domain.unwrap_or_else(|| Domain::from("*"))),
-            route: Some(route.unwrap_or_else(|| "*".to_string())),
+            domain: domain.unwrap_or_else(|| Domain::new("*")),
+            route: route.unwrap_or_else(|| "*".to_string()),
             f: MiddlewareFn::Request(f),
         }
     }
@@ -34,8 +34,8 @@ impl Middleware {
         f: fn(&mut Response),
     ) -> Middleware {
         Self {
-            domain: Some(domain.unwrap_or_else(|| Domain::from("*"))),
-            route: Some(route.unwrap_or_else(|| "*".to_string())),
+            domain: domain.unwrap_or_else(|| Domain::new("*")),
+            route: route.unwrap_or_else(|| "*".to_string()),
             f: MiddlewareFn::Response(f),
         }
     }
@@ -47,8 +47,8 @@ impl Middleware {
         f_res: fn(Response) -> Response,
     ) -> Middleware {
         Self {
-            domain: Some(domain.unwrap_or_else(|| Domain::from("*"))),
-            route: Some(route.unwrap_or_else(|| "*".to_string())),
+            domain: domain.unwrap_or_else(|| Domain::new("*")),
+            route: route.unwrap_or_else(|| "*".to_string()),
             f: MiddlewareFn::Both(f_req, f_res),
         }
     }
@@ -59,8 +59,8 @@ impl Middleware {
         f: fn(&mut Request, Response) -> Response,
     ) -> Middleware {
         Self {
-            domain,
-            route,
+            domain: domain.unwrap_or_else(|| Domain::new("*")),
+            route: route.unwrap_or_else(|| "*".to_string()),
             f: MiddlewareFn::BothResponse(f),
         }
     }

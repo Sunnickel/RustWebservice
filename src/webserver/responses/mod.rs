@@ -1,7 +1,7 @@
 mod response_codes;
 
 use crate::webserver::cookie::Cookie;
-pub(crate) use crate::webserver::responses::response_codes::ResponseCodes;
+pub use crate::webserver::responses::response_codes::ResponseCodes;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,63 +9,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct Response {
     pub headers: ResponseHeaders,
-    content: Arc<String>,
-}
-
-#[derive(Clone)]
-pub struct ResponseHeaders {
-    protocol: String,
-    status: ResponseCodes,
-    values: HashMap<String, String>,
-}
-
-impl ResponseHeaders {
-    pub fn new(protocol: String, status: ResponseCodes, values: HashMap<String, String>) -> Self {
-        Self {
-            protocol,
-            status,
-            values,
-        }
-    }
-
-    pub fn add_header(&mut self, key: &str, value: &str) {
-        self.values.insert(key.to_string(), value.to_string());
-    }
-
-    pub fn as_str(&self) -> String {
-        let mut output = format!(
-            "{} {:?} {}\r\n",
-            self.protocol,
-            self.status.as_u16(),
-            self.status.as_str()
-        );
-        output.push_str(
-            self.values
-                .iter()
-                .map(|(k, v)| format!("{}: {}\r\n", k, v))
-                .collect::<String>()
-                .as_str(),
-        );
-        output.push_str("\r\n");
-        output
-    }
-
-    pub fn set_cookie(&mut self, cookie: Cookie) {
-        self.values
-            .insert("Set-Cookie".to_string(), cookie.as_string());
-    }
-
-    pub fn expire_cookie(&mut self, cookie: Cookie) {
-        let cookie = cookie.clone().expires(Some(
-            DateTime::from_timestamp(0, 0).unwrap().timestamp() as u64,
-        ));
-        self.values
-            .insert("Set-Cookie".to_string(), cookie.as_string());
-    }
-
-    pub fn get_status_code(&self) -> u16 {
-        self.status.as_u16()
-    }
+    pub content: Arc<String>,
 }
 
 impl Response {
@@ -105,5 +49,78 @@ impl Response {
 
     pub fn expire_cookie(&mut self, cookie: Cookie) {
         self.headers.expire_cookie(cookie);
+    }
+
+    pub fn update_content(mut self, content: Arc<String>) -> Self {
+        self.content = content;
+        self
+    }
+}
+
+#[derive(Clone)]
+pub struct ResponseHeaders {
+    pub(crate) protocol: String,
+    pub(crate) status: ResponseCodes,
+    pub(crate) values: HashMap<String, String>,
+}
+
+impl ResponseHeaders {
+    pub(crate) fn new(
+        protocol: String,
+        status: ResponseCodes,
+        values: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            protocol,
+            status,
+            values,
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> String {
+        let mut output = format!(
+            "{} {:?} {}\r\n",
+            self.protocol,
+            self.status.as_u16(),
+            self.status.as_str()
+        );
+        output.push_str(
+            self.values
+                .iter()
+                .map(|(k, v)| format!("{}: {}\r\n", k, v))
+                .collect::<String>()
+                .as_str(),
+        );
+        output.push_str("\r\n");
+        output
+    }
+
+    pub(crate) fn get_status_code(&self) -> u16 {
+        self.status.as_u16()
+    }
+
+    pub fn add_header(&mut self, key: &str, value: &str) {
+        self.values.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn get_header(&self, header: &str) -> Option<String> {
+        if self.values.contains_key(header) {
+            Option::from(self.values.get(header).unwrap().to_string())
+        } else {
+            None
+        }
+    }
+
+    pub fn set_cookie(&mut self, cookie: Cookie) {
+        self.values
+            .insert("Set-Cookie".to_string(), cookie.as_string());
+    }
+
+    pub fn expire_cookie(&mut self, cookie: Cookie) {
+        let cookie = cookie.clone().expires(Some(
+            DateTime::from_timestamp(0, 0).unwrap().timestamp() as u64,
+        ));
+        self.values
+            .insert("Set-Cookie".to_string(), cookie.as_string());
     }
 }

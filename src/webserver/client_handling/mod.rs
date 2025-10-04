@@ -13,7 +13,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
 
-pub struct Client {
+pub(crate) struct Client {
     stream: TcpStream,
     domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
     default_domain: Domain,
@@ -23,7 +23,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(
+    pub(crate) fn new(
         stream: TcpStream,
         domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
         default_domain: Domain,
@@ -40,7 +40,7 @@ impl Client {
         }
     }
 
-    pub fn handle(&mut self) {
+    pub(crate) fn handle(&mut self) {
         let raw_request = if self.tls_config.is_some() {
             match self.handle_tls_connection() {
                 Some(req) => req,
@@ -61,8 +61,6 @@ impl Client {
                 return;
             }
         };
-
-        let cookies = request.get_cookies();
 
         let modified_request = self.apply_request_middleware(request.clone());
         let response = self.handle_routing(modified_request);
@@ -165,14 +163,22 @@ impl Client {
 
     fn apply_request_middleware(&self, mut request: Request) -> Request {
         for middleware in self.middleware.iter() {
-            match &middleware.f {
-                MiddlewareFn::Request(func) => {
-                    func(&mut request);
+            if middleware.route.as_str() != request.route
+                && middleware.route.clone().as_str() != "*"
+            {
+                continue;
+            } else if middleware.domain.as_str() == request.values.get("host").unwrap().as_str() {
+                continue;
+            } else {
+                match &middleware.f {
+                    MiddlewareFn::Request(func) => {
+                        func(&mut request);
+                    }
+                    MiddlewareFn::Both(req_func, _) => {
+                        request = req_func(request);
+                    }
+                    _ => continue,
                 }
-                MiddlewareFn::Both(req_func, _) => {
-                    request = req_func(request);
-                }
-                _ => continue,
             }
         }
         request
@@ -228,7 +234,7 @@ impl Client {
 
         let domain_routes = guard
             .get(&current_domain)
-            .or_else(|| guard.get(&Domain::new("localhost")));
+            .or_else(|| guard.get(&self.default_domain));
 
         if let Some(domain_routes) = domain_routes {
             if let Some(handler) = domain_routes.custom_routes.get(request.route.as_str()) {

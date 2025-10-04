@@ -1,9 +1,10 @@
 mod client_handling;
 pub(crate) mod cookie;
 pub(crate) mod files;
-mod middleware;
-pub(crate) mod requests;
-pub(crate) mod responses;
+pub(crate) mod logger;
+pub(crate) mod middleware;
+mod requests;
+pub mod responses;
 pub(crate) mod server_config;
 
 use crate::webserver::client_handling::Client;
@@ -11,9 +12,9 @@ use crate::webserver::files::get_file_content;
 use crate::webserver::middleware::Middleware;
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
-use crate::webserver::server_config::ServerConfig;
+pub use crate::webserver::server_config::ServerConfig;
 use chrono::Utc;
-use log::{debug, info, trace};
+use log::info;
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -24,28 +25,28 @@ use std::thread;
 pub struct Domain {
     pub name: String,
 }
+
 impl Domain {
     pub fn new(name: &str) -> Domain {
         Self {
             name: name.to_string(),
         }
     }
-    pub fn from(name: &str) -> Domain {
-        Self {
-            name: name.to_string(),
-        }
+    pub fn as_str(&self) -> String {
+        self.name.clone()
     }
 }
 
 #[derive(Clone)]
-pub struct DomainRoutes {
-    pub routes: HashMap<String, String>,
-    pub static_routes: HashMap<String, String>,
-    pub custom_routes: HashMap<String, Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>>,
+pub(crate) struct DomainRoutes {
+    pub(crate) routes: HashMap<String, String>,
+    pub(crate) static_routes: HashMap<String, String>,
+    pub(crate) custom_routes:
+        HashMap<String, Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>>,
 }
 
 impl DomainRoutes {
-    pub fn new() -> DomainRoutes {
+    pub(crate) fn new() -> DomainRoutes {
         Self {
             routes: HashMap::new(),
             static_routes: HashMap::new(),
@@ -55,10 +56,10 @@ impl DomainRoutes {
 }
 
 pub struct WebServer {
-    pub config: ServerConfig,
-    pub domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
-    pub default_domain: Domain,
-    pub middleware: Arc<Vec<Middleware>>,
+    pub(crate) config: ServerConfig,
+    pub(crate) domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+    pub(crate) default_domain: Domain,
+    pub(crate) middleware: Arc<Vec<Middleware>>,
 }
 
 impl WebServer {
@@ -119,7 +120,7 @@ impl WebServer {
             self.default_domain.name
         );
         guard
-            .entry(Domain::from(&*domain_str))
+            .entry(Domain::new(&*domain_str))
             .or_insert_with(DomainRoutes::new);
     }
 
@@ -204,7 +205,7 @@ impl WebServer {
         }
     }
 
-    pub fn logging(request: &mut Request, response: Response) -> Response {
+    pub(crate) fn logging(request: &mut Request, response: Response) -> Response {
         info!(
             "[{}] {:<6} {:<30} -> {:3} (host: {})",
             Utc::now().format("%Y-%m-%d %H:%M:%S"),

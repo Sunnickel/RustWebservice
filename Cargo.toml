@@ -1,5 +1,5 @@
 [package]
-name = "RustWebservice"
+name = "WebSun"
 version = "0.1.0"
 edition = "2024"
 authors = ["Sunnickel"]
@@ -9,6 +9,5 @@ categories = ["web-programming::http-server"]
 [dependencies]
 chrono = "0.4.42"
 log = "0.4.28"
-rustls = "0.21"
-rustls-pemfile = "1.0"
-time = "0.3.44"
+rustls = "0.23.32"
+rustls-pki-types = "1.12.0"

@@ -2,4 +2,5 @@
 /Cargo.lock
 /.idea
 /tests.http
-/certificates/
+/tests/certificates/
+/src/main.rs
