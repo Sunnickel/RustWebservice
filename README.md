@@ -32,8 +32,8 @@ Or install from GitHub:
 ## Quick Start
 
 ```rust 
-use SunWeb::webserver::{WebServer, ServerConfig};
-use SunWeb::WEB_LOGGER;
+use sunweb::webserver::{WebServer, ServerConfig};
+use sunweb::WEB_LOGGER;
 
 fn main() {
     // Initialize logger 
@@ -60,7 +60,7 @@ fn main() {
 ### Basic HTTP Server
 
 ```rust
-use SunWeb::webserver::{WebServer, ServerConfig};
+use sunweb::webserver::{WebServer, ServerConfig};
 let config = ServerConfig::new([127, 0, 0, 1], 8080);
 let server = WebServer::new(config); server.start();
 ```
@@ -75,7 +75,7 @@ let server = WebServer::new(config); server.start();
 ### Custom Route Handlers
 
 ```rust
-use SunWeb::webserver::responses::{Response, ResponseCodes};
+use sunweb::webserver::responses::{Response, ResponseCodes};
 use std::sync::Arc;
 
 server.add_custom_route("/api/hello", | req, domain| {
@@ -96,8 +96,8 @@ server.add_static_route("/static", "./static", None).unwrap();
 Working with Cookies
 
 ```rust
-use SunWeb::webserver::cookie::{Cookie, SameSite};
-use SunWeb::webserver::Domain;
+use sunweb::webserver::cookie::{Cookie, SameSite};
+use sunweb::webserver::Domain;
 
 server.add_custom_route("/set-cookie", | req, domain| {
 let content = Arc::new(String::from("Cookie set!"));
@@ -118,7 +118,7 @@ response
 Subdomain Routing
 
 ```rust
-use SunWeb::webserver::Domain;
+use sunweb::webserver::Domain;
 
 let api_domain = Domain::new("api");
 server.add_subdomain_router( & api_domain);
