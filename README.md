@@ -20,13 +20,13 @@ capabilities.
 Add this to your `Cargo.toml`:
 
 ```toml 
-[dependencies] SunWeb = "0.1.0"
+[dependencies] sunweb = "0.1.0"
 ``` 
 
 Or install from GitHub:
 
 ```toml 
-[dependencies] SunWeb = { git = "https://github.com/Sunnickel/SunWeb" }
+[dependencies] sunweb = { git = "https://github.com/Sunnickel/SunWeb" }
 ``` 
 
 ## Quick Start
