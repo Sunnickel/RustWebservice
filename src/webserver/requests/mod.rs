@@ -6,10 +6,11 @@ pub struct Request {
     pub method: String,
     pub route: String,
     pub values: HashMap<String, String>,
+    pub remote_addr: String,
 }
 
 impl Request {
-    pub fn new(request: String) -> Option<Request> {
+    pub fn new(request: String, remote_addr: String) -> Option<Request> {
         let mut lines = request.lines();
 
         let request_line = lines.next()?;
@@ -25,6 +26,7 @@ impl Request {
             method,
             route,
             values,
+            remote_addr,
         })
     }
 

@@ -23,6 +23,7 @@ pub enum ResponseCodes {
     Forbidden = 403,
     NotFound = 404,
     MethodNotAllowed = 405,
+    TooManyRequests = 429,
 
     // 5xx Server Error
     InternalServerError = 500,
@@ -57,6 +58,7 @@ impl ResponseCodes {
             ResponseCodes::Forbidden => "Forbidden",
             ResponseCodes::NotFound => "Not Found",
             ResponseCodes::MethodNotAllowed => "Method Not Allowed",
+            ResponseCodes::TooManyRequests => "Too Many Requests",
 
             // 5xx
             ResponseCodes::InternalServerError => "Internal Server Error",

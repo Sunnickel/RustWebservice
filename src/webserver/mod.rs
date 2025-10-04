@@ -1,16 +1,18 @@
 mod client_handling;
-mod files;
+pub(crate) mod files;
 mod middleware;
 pub(crate) mod requests;
 pub(crate) mod responses;
+pub(crate) mod server_config;
 
 use crate::webserver::client_handling::Client;
 use crate::webserver::files::get_file_content;
 use crate::webserver::middleware::Middleware;
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
+use crate::webserver::server_config::ServerConfig;
 use chrono::Utc;
-use log::{info, trace};
+use log::{debug, info, trace};
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -52,15 +54,14 @@ impl DomainRoutes {
 }
 
 pub struct WebServer {
-    pub host: [u8; 4],
-    pub port: u16,
+    pub config: ServerConfig,
     pub domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
     pub default_domain: Domain,
     pub middleware: Arc<Vec<Middleware>>,
 }
 
 impl WebServer {
-    pub fn new(host: [u8; 4], port: u16) -> WebServer {
+    pub fn new(config: ServerConfig) -> WebServer {
         let mut domains = HashMap::new();
         let default_domain = Domain::new("");
         domains.insert(default_domain.clone(), DomainRoutes::new());
@@ -71,28 +72,34 @@ impl WebServer {
         middlewares.push(logging_middleware);
 
         WebServer {
-            host,
-            port,
+            config,
             domains: Arc::new(Mutex::new(domains)),
-            middleware: Arc::from(middlewares),
             default_domain,
+            middleware: Arc::from(middlewares),
         }
     }
 
     pub fn start(&self) {
-        let bind_addr = format!(
-            "{}.{}.{}.{}:{}",
-            self.host[0], self.host[1], self.host[2], self.host[3], self.port
-        );
+        let bind_addr = self.config.ip_as_string();
         let listener = TcpListener::bind(&bind_addr).unwrap();
-        info!("Server running on http://{bind_addr}/");
+
+        if self.config.using_https {
+            info!("Server running on https://{bind_addr}/");
+        } else {
+            info!(
+                "Server running on http://{bind_addr}/",
+                bind_addr = bind_addr
+            );
+        }
+
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
                     let domains = Arc::clone(&self.domains);
                     let middleware = Arc::clone(&self.middleware);
+                    let tls_config = self.config.tls_config.clone();
                     thread::spawn(move || {
-                        let mut client: Client = Client::new(stream, domains, middleware);
+                        let mut client = Client::new(stream, domains, middleware, tls_config);
                         client.handle();
                     });
                 }
@@ -189,7 +196,7 @@ impl WebServer {
     }
 
     pub fn logging(request: &mut Request, response: Response) -> Response {
-        trace!(
+        info!(
             "[{}] {:<6} {:<30} -> {:3} (host: {})",
             Utc::now().format("%Y-%m-%d %H:%M:%S"),
             request.method,
