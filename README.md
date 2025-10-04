@@ -216,7 +216,7 @@ Sunnickel
 ## Links
 
 - [Repository](https://github.com/Sunnickel/SunWeb)
-- [Documentation](https://github.com/Sunnickel/SunWeb)
+- [Documentation](https://docs.rs/sunweb/0.1.0/sunweb)
 
 ## AI Assistance
 
