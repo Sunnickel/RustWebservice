@@ -1,4 +1,4 @@
-# Project: SunWeb
+# Project: sunweb
 > Sunnickel | 04.10.2025
 ---
 A lightweight, fast, and flexible HTTP/HTTPS web server written in Rust with domain routing, middleware support, and TLS
