@@ -4,17 +4,19 @@ use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
 use crate::webserver::responses::ResponseCodes;
 use crate::webserver::{Domain, DomainRoutes};
-use log::{error, warn};
+use log::warn;
 use rustls::{ServerConfig, ServerConnection};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
 
 pub struct Client {
     stream: TcpStream,
     domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+    default_domain: Domain,
     middleware: Arc<Vec<Middleware>>,
     tls_config: Option<Arc<ServerConfig>>,
     tls_connection: Option<ServerConnection>,
@@ -24,12 +26,14 @@ impl Client {
     pub fn new(
         stream: TcpStream,
         domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+        default_domain: Domain,
         middleware: Arc<Vec<Middleware>>,
         tls_config: Option<Arc<ServerConfig>>,
     ) -> Self {
         Self {
             stream,
             domains,
+            default_domain,
             middleware,
             tls_config,
             tls_connection: None,
@@ -57,6 +61,8 @@ impl Client {
                 return;
             }
         };
+
+        let cookies = request.get_cookies();
 
         let modified_request = self.apply_request_middleware(request.clone());
         let response = self.handle_routing(modified_request);
@@ -217,21 +223,24 @@ impl Client {
 
     fn handle_routing(&mut self, request: Request) -> Response {
         let host = request.values.get("host").cloned().unwrap_or_default();
+        let current_domain = Domain::new(&host);
         let guard = self.domains.lock().unwrap();
 
-        let domain_name = if !host.is_empty() {
-            host.split('.').next().unwrap_or("").to_string()
-        } else {
-            "".to_string()
-        };
-
         let domain_routes = guard
-            .get(&Domain::new(&domain_name))
-            .or_else(|| guard.get(&Domain::new("")));
+            .get(&current_domain)
+            .or_else(|| guard.get(&Domain::new("localhost")));
 
         if let Some(domain_routes) = domain_routes {
             if let Some(handler) = domain_routes.custom_routes.get(request.route.as_str()) {
-                handler(request)
+                catch_unwind(AssertUnwindSafe(|| handler(request, &current_domain))).unwrap_or_else(
+                    |_| {
+                        Response::new(
+                            Arc::from("<h1>500 Internal Server Error</h1>".to_string()),
+                            Some(ResponseCodes::InternalServerError),
+                            None,
+                        )
+                    },
+                )
             } else if let Some((_, folder)) =
                 find_static_folder(&domain_routes.static_routes, &request.route)
             {

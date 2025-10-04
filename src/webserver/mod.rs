@@ -1,4 +1,5 @@
 mod client_handling;
+pub(crate) mod cookie;
 pub(crate) mod files;
 mod middleware;
 pub(crate) mod requests;
@@ -40,7 +41,7 @@ impl Domain {
 pub struct DomainRoutes {
     pub routes: HashMap<String, String>,
     pub static_routes: HashMap<String, String>,
-    pub custom_routes: HashMap<String, Arc<dyn Fn(Request) -> Response + Send + Sync>>,
+    pub custom_routes: HashMap<String, Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>>,
 }
 
 impl DomainRoutes {
@@ -63,7 +64,7 @@ pub struct WebServer {
 impl WebServer {
     pub fn new(config: ServerConfig) -> WebServer {
         let mut domains = HashMap::new();
-        let default_domain = Domain::new("");
+        let default_domain = Domain::new(&*config.base_domain);
         domains.insert(default_domain.clone(), DomainRoutes::new());
 
         let mut middlewares = Vec::new();
@@ -98,8 +99,10 @@ impl WebServer {
                     let domains = Arc::clone(&self.domains);
                     let middleware = Arc::clone(&self.middleware);
                     let tls_config = self.config.tls_config.clone();
+                    let default_domain = self.default_domain.clone();
                     thread::spawn(move || {
-                        let mut client = Client::new(stream, domains, middleware, tls_config);
+                        let mut client =
+                            Client::new(stream, domains, default_domain, middleware, tls_config);
                         client.handle();
                     });
                 }
@@ -108,19 +111,25 @@ impl WebServer {
         }
     }
 
-    pub fn add_subdomain_router(&mut self, mut domain: Domain) {
+    pub fn add_subdomain_router(&mut self, domain: &Domain) {
         let mut guard = self.domains.lock().unwrap();
-        domain.name = domain.name.to_lowercase();
-        guard.entry(domain).or_insert_with(DomainRoutes::new);
+        let domain_str = format!(
+            "{}.{}",
+            domain.name.to_lowercase(),
+            self.default_domain.name
+        );
+        guard
+            .entry(Domain::from(&*domain_str))
+            .or_insert_with(DomainRoutes::new);
     }
 
     pub fn add_route_file(
         &mut self,
         route: &str,
         file_path: &str,
-        domain: Option<Domain>,
+        domain: Option<&Domain>,
     ) -> Result<(), String> {
-        let domain = domain.unwrap_or_else(|| self.default_domain.clone());
+        let domain = domain.unwrap_or_else(|| &self.default_domain);
         let content = get_file_content(&PathBuf::from(file_path));
 
         let mut guard = self.domains.lock().unwrap();
@@ -147,9 +156,9 @@ impl WebServer {
         &mut self,
         route: &str,
         folder: &str,
-        domain: Option<Domain>,
+        domain: Option<&Domain>,
     ) -> Result<(), String> {
-        let domain = domain.unwrap_or_else(|| self.default_domain.clone());
+        let domain = domain.unwrap_or_else(|| &self.default_domain);
         let folder_path = PathBuf::from(folder);
 
         if !folder_path.exists() {
@@ -179,10 +188,10 @@ impl WebServer {
     pub fn add_custom_route(
         &self,
         route: &str,
-        f: impl Fn(Request) -> Response + Send + Sync + 'static,
-        domain: Option<Domain>,
+        f: impl Fn(Request, &Domain) -> Response + Send + Sync + 'static,
+        domain: Option<&Domain>,
     ) -> Result<(), String> {
-        let domain = domain.unwrap_or_else(|| Domain::new(""));
+        let domain = domain.unwrap_or_else(|| &self.default_domain);
 
         match self.domains.lock().unwrap().get_mut(&domain) {
             Some(domain_routes) => {

@@ -1,7 +1,8 @@
 mod response_codes;
 
+use crate::webserver::cookie::Cookie;
 pub(crate) use crate::webserver::responses::response_codes::ResponseCodes;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -49,6 +50,19 @@ impl ResponseHeaders {
         output
     }
 
+    pub fn set_cookie(&mut self, cookie: Cookie) {
+        self.values
+            .insert("Set-Cookie".to_string(), cookie.as_string());
+    }
+
+    pub fn expire_cookie(&mut self, cookie: Cookie) {
+        let cookie = cookie.clone().expires(Some(
+            DateTime::from_timestamp(0, 0).unwrap().timestamp() as u64,
+        ));
+        self.values
+            .insert("Set-Cookie".to_string(), cookie.as_string());
+    }
+
     pub fn get_status_code(&self) -> u16 {
         self.status.as_u16()
     }
@@ -83,5 +97,13 @@ impl Response {
         let mut output = String::from(self.headers.as_str());
         output.push_str(self.content.as_str());
         output
+    }
+
+    pub fn add_cookie(&mut self, cookie: Cookie) {
+        self.headers.set_cookie(cookie);
+    }
+
+    pub fn expire_cookie(&mut self, cookie: Cookie) {
+        self.headers.expire_cookie(cookie);
     }
 }

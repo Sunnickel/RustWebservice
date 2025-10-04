@@ -1,4 +1,6 @@
-﻿use std::collections::HashMap;
+﻿use crate::webserver::Domain;
+use crate::webserver::cookie::Cookie;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Request {
@@ -30,16 +32,28 @@ impl Request {
         })
     }
 
-    pub fn get_cookies(&self) -> Option<HashMap<&str, &str>> {
-        let cookie_str = self.values.get("cookie")?;
+    pub fn get_cookies(&self) -> Vec<Cookie> {
+        let Some(cookie_str) = self.values.get("cookie") else {
+            return Vec::new();
+        };
 
-        let mut cookies = HashMap::new();
-        for cookie_pair in cookie_str.split(';') {
+        let mut cookies: Vec<Cookie> = Vec::new();
+        for cookie_pair in cookie_str.as_str().split(';') {
             if let Some((key, value)) = cookie_pair.trim().split_once('=') {
-                cookies.insert(key, value);
+                if let Some(host) = self.values.get("host") {
+                    cookies.push(Cookie::new(
+                        key.trim(),
+                        value.trim(),
+                        &Domain::new(host.as_str()),
+                    ));
+                }
             }
         }
-        Some(cookies)
+        cookies
+    }
+
+    pub fn get_cookie(&self, key: &str) -> Option<Cookie> {
+        self.get_cookies().into_iter().find(|c| c.key == key)
     }
 }
 
