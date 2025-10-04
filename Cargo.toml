@@ -1,6 +1,6 @@
 [package]
 name = "sunweb"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 authors = ["Sunnickel"]
 categories = ["web-programming::http-server", "web-programming"]
