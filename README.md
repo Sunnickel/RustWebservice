@@ -140,40 +140,40 @@ None
 
 Configure your web server:
 
-- new(host: [u8; 4], port: u16) - Create new configuration
-- add_cert(private_key: String, cert: String) - Enable HTTPS
-- set_base_domain(domain: String) - Set the base domain
+- ```new(host: [u8; 4], port: u16)``` - Create new configuration
+- ```add_cert(private_key: String, cert: String)``` - Enable HTTPS
+- ```set_base_domain(domain: String)``` - Set the base domain
 
 ### WebServer
 
 Main server instance:
 
-- new(config: ServerConfig) - Create new server
-- start() - Start listening for connections
-- add_route_file(route: &str, file: &str, domain: Option<&Domain>) - Add file route
-- add_static_route(route: &str, folder: &str, domain: Option<&Domain>) - Add static folder
-- add_custom_route(route: &str, handler: Fn, domain: Option<&Domain>) - Add custom handler
-- add_subdomain_router(domain: &Domain) - Enable subdomain routing
+- ```new(config: ServerConfig)``` - Create new server
+- ```start()``` - Start listening for connections
+- ```add_route_file(route: &str, file: &str, domain: Option<&Domain>)``` - Add file route
+- ```add_static_route(route: &str, folder: &str, domain: Option<&Domain>)``` - Add static folder
+- ```add_custom_route(route: &str, handler: Fn, domain: Option<&Domain>)``` - Add custom handler
+- ```add_subdomain_router(domain: &Domain)``` - Enable subdomain routing
 
 ### Response
 
 HTTP response handling:
 
-- new(content: Arc<String>, code: Option<ResponseCodes>, protocol: Option<String>) - Create response
-- add_cookie(cookie: Cookie) - Add cookie to response
-- headers.add_header(key: &str, value: &str) - Add custom header
+- ```new(content: Arc<String>, code: Option<ResponseCodes>, protocol: Option<String>)``` - Create response
+- ```add_cookie(cookie: Cookie)``` - Add cookie to response
+- ```headers.add_header(key: &str, value: &str)``` - Add custom header
 
 ### Request
 
 HTTP request information:
 
-- protocol: String - HTTP protocol version
-- method: String - HTTP method (GET, POST, etc.)
-- route: String - Requested route
-- values: HashMap<String, String> - Request headers
-- remote_addr: String - Client IP address
-- get_cookies() - Get all cookies
-- get_cookie(key: &str) - Get specific cookie
+- ```protocol: String``` - HTTP protocol version
+- ```method: String``` - HTTP method (GET, POST, etc.)
+- ```route: String``` - Requested route
+- ```values: HashMap<String, String>``` - Request headers
+- ```remote_addr: String``` - Client IP address
+- ```get_cookies()``` - Get all cookies
+- ```get_cookie(key: &str)``` - Get specific cookie
 
 ## Project Structure
 
@@ -218,3 +218,13 @@ Sunnickel
 - [Repository](https://github.com/Sunnickel/SunWeb)
 - [Documentation](https://github.com/Sunnickel/SunWeb)
 
+## AI Assistance
+
+This project's documentation, including this `README.md` file, has been created with the assistance of AI.
+
+Specifically, AI was used for:
+
+*   Documentation generation
+*   Content creation for this `README.md`
+
+All content has been reviewed and edited to ensure accuracy and clarity. While AI tools were utilized to accelerate the writing process, all information has been manually checked for correctness.
