@@ -1,3 +1,47 @@
+//! HTTP response status codes enumeration
+//!
+//! This module defines all standard HTTP response status codes as an enumeration,
+//! organized by category (1xx Informational, 2xx Success, 3xx Redirection,
+//! 4xx Client Error, and 5xx Server Error). Each variant corresponds to a specific
+//! HTTP status code and includes both the numeric value and descriptive string.
+//!
+//! The enum implements conversion methods to retrieve the numeric code and
+//! descriptive string representation of each status code.
+//!
+//! # Examples
+//!
+//! ```
+//! use your_crate::ResponseCodes;
+//!
+//! let status = ResponseCodes::Ok;
+//! assert_eq!(status.as_u16(), 200);
+//! assert_eq!(status.as_str(), "OK");
+//!
+//! let not_found = ResponseCodes::NotFound;
+//! assert_eq!(not_found.as_u16(), 404);
+//! assert_eq!(not_found.as_str(), "Not Found");
+//! ```
+/// HTTP response status codes enum
+///
+/// This enum represents all standard HTTP response status codes organized by class:
+/// - 1xx: Informational
+/// - 2xx: Success
+/// - 3xx: Redirection
+/// - 4xx: Client Error
+/// - 5xx: Server Error
+///
+/// Each variant is explicitly assigned its corresponding numeric value to match
+/// the HTTP status code standard. The enum uses `u16` representation to accommodate
+/// all possible HTTP status codes.
+///
+/// # Examples
+/// ```
+/// let status = ResponseCodes::Ok;
+/// assert_eq!(status as u16, 200);
+///
+/// let status = ResponseCodes::NotFound;
+/// assert_eq!(status as u16, 404);
+/// ```
 #[derive(Clone, Copy, Debug)]
 #[repr(u16)]
 pub enum ResponseCodes {
@@ -74,10 +118,44 @@ pub enum ResponseCodes {
 }
 
 impl ResponseCodes {
+    ///
+    /// # Arguments
+    /// * `response_codes` - The other response code to compare against
+    ///
+    /// # Returns
+    /// Returns `true` if both the numeric value and string representation match,
+    /// `false` otherwise.
+    ///
+    /// # Examples
+    /// ```
+    /// use your_crate::ResponseCodes;
+    ///
+    /// let status1 = ResponseCodes::Ok;
+    /// let status2 = ResponseCodes::Ok;
+    /// assert_eq!(status1.equals(status2), true);
+    ///
+    /// let status3 = ResponseCodes::NotFound;
+    /// assert_eq!(status1.equals(status3), false);
+    /// ```
     pub fn equals(&self, response_codes: ResponseCodes) -> bool {
-        (self.as_u16() == response_codes.as_u16()) && (self.as_str() == response_codes.as_str())
+        self.as_u16() == response_codes.as_u16() && self.as_str() == response_codes.as_str()
     }
 
+    /// Get the string representation of the response code
+    ///
+    /// # Returns
+    /// A static string slice representing the HTTP status message for this code.
+    ///
+    /// # Examples
+    /// ```
+    /// use your_crate::ResponseCodes;
+    ///
+    /// let status = ResponseCodes::Ok;
+    /// assert_eq!(status.as_str(), "OK");
+    ///
+    /// let not_found = ResponseCodes::NotFound;
+    /// assert_eq!(not_found.as_str(), "Not Found");
+    /// ```
     pub fn as_str(&self) -> &'static str {
         match self {
             // 1xx
@@ -152,7 +230,21 @@ impl ResponseCodes {
             ResponseCodes::NetworkAuthenticationRequired => "Network Authentication Required",
         }
     }
-
+    /// Get the numeric value of the response code
+    ///
+    /// # Returns
+    /// The u16 representation of this HTTP status code.
+    ///
+    /// # Examples
+    /// ```
+    /// use your_crate::ResponseCodes;
+    ///
+    /// let status = ResponseCodes::Ok;
+    /// assert_eq!(status.as_u16(), 200);
+    ///
+    /// let not_found = ResponseCodes::NotFound;
+    /// assert_eq!(not_found.as_u16(), 404);
+    /// ```
     pub fn as_u16(&self) -> u16 {
         *self as u16
     }

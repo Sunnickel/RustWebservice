@@ -1,3 +1,8 @@
+//! A web server implementation with domain routing capabilities.
+//!
+//! This module provides the core components for building a web server,
+//! including domain handling, routing, middleware support, and request/response processing.
+
 mod client_handling;
 pub(crate) mod cookie;
 pub(crate) mod files;
@@ -13,6 +18,7 @@ use crate::webserver::middleware::Middleware;
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
 pub use crate::webserver::server_config::ServerConfig;
+
 use chrono::Utc;
 use log::info;
 use std::collections::HashMap;
@@ -21,31 +27,57 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Represents a domain name used for routing.
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub struct Domain {
+    /// The domain name as a string.
     pub name: String,
 }
 
 impl Domain {
+    /// Creates a new `Domain` instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - A string slice that holds the domain name.
+    ///
+    /// # Returns
+    ///
+    /// A new `Domain` instance with the specified name.
     pub fn new(name: &str) -> Domain {
         Self {
             name: name.to_string(),
         }
     }
+
+    /// Returns the domain name as a string.
+    ///
+    /// # Returns
+    ///
+    /// The domain name as a `String`.
     pub fn as_str(&self) -> String {
         self.name.clone()
     }
 }
 
+/// Holds routing information for a specific domain.
 #[derive(Clone)]
 pub(crate) struct DomainRoutes {
+    /// Map of route patterns to file content strings.
     pub(crate) routes: HashMap<String, String>,
+    /// Map of route patterns to folder paths for static files.
     pub(crate) static_routes: HashMap<String, String>,
+    /// Map of route patterns to custom route handlers.
     pub(crate) custom_routes:
         HashMap<String, Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>>,
 }
 
 impl DomainRoutes {
+    /// Creates a new `DomainRoutes` instance with empty maps.
+    ///
+    /// # Returns
+    ///
+    /// A new `DomainRoutes` instance.
     pub(crate) fn new() -> DomainRoutes {
         Self {
             routes: HashMap::new(),
@@ -55,24 +87,43 @@ impl DomainRoutes {
     }
 }
 
+/// The main web server structure.
 pub struct WebServer {
+    /// Server configuration including IP, port, and TLS settings.
     pub(crate) config: ServerConfig,
+    /// Map of domains to their respective routing configurations.
     pub(crate) domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+    /// The default domain used for subdomain generation.
     pub(crate) default_domain: Domain,
+    /// List of middleware functions to be applied to requests and responses.
     pub(crate) middleware: Arc<Vec<Middleware>>,
 }
 
 impl WebServer {
+    /// Creates a new `WebServer` instance with the provided configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - A `ServerConfig` struct containing server settings.
+    ///
+    /// # Returns
+    ///
+    /// A new `WebServer` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use webserver::ServerConfig;
+    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
+    /// let server = WebServer::new(config);
+    /// ```
     pub fn new(config: ServerConfig) -> WebServer {
         let mut domains = HashMap::new();
         let default_domain = Domain::new(&*config.base_domain);
         domains.insert(default_domain.clone(), DomainRoutes::new());
-
         let mut middlewares = Vec::new();
         let logging_middleware = Middleware::new_response_both(None, None, Self::logging);
-
         middlewares.push(logging_middleware);
-
         WebServer {
             config,
             domains: Arc::new(Mutex::new(domains)),
@@ -81,10 +132,26 @@ impl WebServer {
         }
     }
 
+    /// Starts the web server and begins listening for incoming connections.
+    ///
+    /// # Side Effects
+    ///
+    /// * Binds to the configured IP address and port.
+    /// * Spawns new threads for each incoming connection.
+    /// * Logs server start information.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use webserver::ServerConfig;
+    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
+    /// let mut server = WebServer::new(config);
+    /// // Note: This will block the calling thread
+    /// server.start();
+    /// ```
     pub fn start(&self) {
         let bind_addr = self.config.ip_as_string();
         let listener = TcpListener::bind(&bind_addr).unwrap();
-
         if self.config.using_https {
             info!("Server running on https://{bind_addr}/");
         } else {
@@ -93,7 +160,6 @@ impl WebServer {
                 bind_addr = bind_addr
             );
         }
-
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -112,6 +178,25 @@ impl WebServer {
         }
     }
 
+    /// Adds a new subdomain router for the specified domain.
+    ///
+    /// # Arguments
+    ///
+    /// * `domain` - A reference to the `Domain` to add as a subdomain.
+    ///
+    /// # Side Effects
+    ///
+    /// * Inserts a new entry in the domains map with the full subdomain name.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use webserver::{WebServer, ServerConfig, Domain};
+    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
+    /// let mut server = WebServer::new(config);
+    /// let domain = Domain::new("api");
+    /// server.add_subdomain_router(&domain);
+    /// ```
     pub fn add_subdomain_router(&mut self, domain: &Domain) {
         let mut guard = self.domains.lock().unwrap();
         let domain_str = format!(
@@ -124,6 +209,27 @@ impl WebServer {
             .or_insert_with(DomainRoutes::new);
     }
 
+    /// Adds a file-based route to the specified domain.
+    ///
+    /// # Arguments
+    ///
+    /// * `route` - The route pattern to match (e.g., "/about").
+    /// * `file_path` - The path to the file whose content will be served.
+    /// * `domain` - Optional reference to the domain; if None, uses default domain.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` on successful addition.
+    /// * `Err(String)` if there's an error (e.g., file doesn't exist).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use webserver::{WebServer, ServerConfig, Domain};
+    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
+    /// let mut server = WebServer::new(config);
+    /// server.add_route_file("/about", "./static/about.html", None);
+    /// ```
     pub fn add_route_file(
         &mut self,
         route: &str,
@@ -132,13 +238,10 @@ impl WebServer {
     ) -> Result<(), String> {
         let domain = domain.unwrap_or_else(|| &self.default_domain);
         let content = get_file_content(&PathBuf::from(file_path));
-
         let mut guard = self.domains.lock().unwrap();
-
         if !guard.contains_key(&domain) {
             guard.insert(domain.clone(), DomainRoutes::new());
         }
-
         match guard.get_mut(&domain) {
             Some(domain_routes) => {
                 domain_routes
@@ -153,6 +256,27 @@ impl WebServer {
         }
     }
 
+    /// Adds a static file route to the specified domain.
+    ///
+    /// # Arguments
+    ///
+    /// * `route` - The route pattern to match (e.g., "/static").
+    /// * `folder` - The path to the folder containing static files.
+    /// * `domain` - Optional reference to the domain; if None, uses default domain.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` on successful addition.
+    /// * `Err(String)` if there's an error (e.g., folder doesn't exist).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use webserver::{WebServer, ServerConfig, Domain};
+    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
+    /// let mut server = WebServer::new(config);
+    /// server.add_static_route("/assets", "./static/assets", None);
+    /// ```
     pub fn add_static_route(
         &mut self,
         route: &str,
@@ -161,17 +285,13 @@ impl WebServer {
     ) -> Result<(), String> {
         let domain = domain.unwrap_or_else(|| &self.default_domain);
         let folder_path = PathBuf::from(folder);
-
         if !folder_path.exists() {
             return Err(format!("Folder doesn't exist: {}", folder));
         }
-
         let mut guard = self.domains.lock().unwrap();
-
         if !guard.contains_key(&domain) {
             guard.insert(domain.clone(), DomainRoutes::new());
         }
-
         match guard.get_mut(&domain) {
             Some(domain_routes) => {
                 domain_routes
@@ -186,6 +306,30 @@ impl WebServer {
         }
     }
 
+    /// Adds a custom route handler to the specified domain.
+    ///
+    /// # Arguments
+    ///
+    /// * `route` - The route pattern to match (e.g., "/api").
+    /// * `f` - A closure or function that takes a `Request` and `Domain` and returns a `Response`.
+    /// * `domain` - Optional reference to the domain; if None, uses default domain.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` on successful addition.
+    /// * `Err(String)` if the domain is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
+    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
+    /// let server = WebServer::new(config);
+    /// server.add_custom_route("/api", |req, domain| {
+    ///     // Custom logic here
+    ///     Response::new(200, "Hello from API".to_string())
+    /// }, None);
+    /// ```
     pub fn add_custom_route(
         &self,
         route: &str,
@@ -193,7 +337,6 @@ impl WebServer {
         domain: Option<&Domain>,
     ) -> Result<(), String> {
         let domain = domain.unwrap_or_else(|| &self.default_domain);
-
         match self.domains.lock().unwrap().get_mut(&domain) {
             Some(domain_routes) => {
                 domain_routes
@@ -205,6 +348,20 @@ impl WebServer {
         }
     }
 
+    /// A logging middleware function that logs request and response details.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - Mutable reference to the incoming `Request`.
+    /// * `response` - The `Response` to be sent back.
+    ///
+    /// # Returns
+    ///
+    /// The same `Response` passed in, unchanged.
+    ///
+    /// # Examples
+    ///
+    /// This function is used internally by the server for logging.
     pub(crate) fn logging(request: &mut Request, response: Response) -> Response {
         info!(
             "[{}] {:<6} {:<30} -> {:3} (host: {})",
