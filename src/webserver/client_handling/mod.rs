@@ -361,6 +361,15 @@ impl Client {
                 find_static_folder(&domain_routes.static_routes, &request.route)
             {
                 let (content, content_type) = get_static_file_content(&request.route, folder);
+
+                if content == Arc::from(String::new()) {
+                    return Response::new(
+                        Arc::from("<h1>404 Not found</h1>".to_string()),
+                        Some(ResponseCodes::NotFound),
+                        None,
+                    );
+                }
+
                 let mut response = Response::new(content, None, None);
                 response.headers.add_header("Content-Type", &content_type);
                 response

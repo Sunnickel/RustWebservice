@@ -28,6 +28,10 @@ use std::{
 /// assert_eq!(mime_type, "text/css");
 /// ```
 pub(crate) fn get_static_file_content<'a>(route: &str, folder: &String) -> (Arc<String>, String) {
+    if folder.split('/').last().unwrap() == route.replace("/", "") {
+        return (Arc::new(String::new()), String::new());
+    }
+
     let file_relative_path = route
         .strip_prefix(folder)
         .unwrap_or(route)
@@ -71,8 +75,12 @@ pub(crate) fn get_static_file_content<'a>(route: &str, folder: &String) -> (Arc<
 /// let content = get_file_content(&Path::new("example.txt"));
 /// ```
 pub(crate) fn get_file_content(file_path: &Path) -> Arc<String> {
+    if !Path::exists(file_path) {
+        return Arc::new(String::new());
+    }
+
     let file =
-        File::open(file_path).unwrap_or_else(|_| panic!("Could not open file: {:?}", file_path));
+        File::open(file_path).unwrap_or_else(|_| panic!("Cannot open {}", file_path.display()));
     let mut buf_reader = BufReader::new(file);
     let mut contents = String::new();
     buf_reader
