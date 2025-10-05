@@ -8,7 +8,6 @@ pub(crate) mod cookie;
 pub(crate) mod files;
 pub(crate) mod logger;
 pub(crate) mod middleware;
-mod proxy;
 mod requests;
 pub mod responses;
 pub(crate) mod server_config;
@@ -17,7 +16,7 @@ use crate::webserver::client_handling::Client;
 use crate::webserver::files::get_file_content;
 use crate::webserver::middleware::Middleware;
 use crate::webserver::requests::Request;
-use crate::webserver::responses::{Response, ResponseCodes};
+use crate::webserver::responses::Response;
 pub use crate::webserver::server_config::ServerConfig;
 
 use chrono::Utc;
@@ -71,10 +70,6 @@ pub(crate) struct DomainRoutes {
     /// Map of route patterns to custom route handlers.
     pub(crate) custom_routes:
         HashMap<String, Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>>,
-    /// Map of routes where to go after an Error or code.
-    pub(crate) code_routes: HashMap<ResponseCodes, String>,
-    /// The routes on the server where to proxy it too.
-    pub(crate) proxy_route: HashMap<String, String>,
 }
 
 impl DomainRoutes {
@@ -88,8 +83,6 @@ impl DomainRoutes {
             routes: HashMap::new(),
             static_routes: HashMap::new(),
             custom_routes: HashMap::new(),
-            code_routes: HashMap::new(),
-            proxy_route: HashMap::new(),
         }
     }
 }
@@ -130,12 +123,7 @@ impl WebServer {
         domains.insert(default_domain.clone(), DomainRoutes::new());
         let mut middlewares = Vec::new();
         let logging_middleware = Middleware::new_response_both(None, None, Self::logging);
-        let error_page_middleware =
-            Middleware::new_response_both_w_routes(None, None, Self::errorpage);
-
         middlewares.push(logging_middleware);
-        middlewares.push(error_page_middleware);
-
         WebServer {
             config,
             domains: Arc::new(Mutex::new(domains)),
@@ -358,94 +346,6 @@ impl WebServer {
         self
     }
 
-    /// Adds a route to a specific on error
-    ///
-    /// # Arguments
-    ///
-    /// * `status_code` - The Code it should react on.
-    /// * `file` - the file that will be shown on the code.
-    /// * `domain` - Optional reference to the domain; if None, uses default domain.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` on successful addition.
-    /// * `Err(String)` if the domain is not found.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use sunweb::webserver::responses::ResponseCodes;
-    /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
-    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let server = WebServer::new(config);
-    /// server.add_error_route(ResponseCodes::NotFound, "./resources/errors/404.html", None);
-    /// ```
-    pub fn add_error_route(
-        &mut self,
-        status_code: ResponseCodes,
-        file: &str,
-        domain: Option<&Domain>,
-    ) -> &mut Self {
-        let domain = domain
-            .cloned()
-            .unwrap_or_else(|| self.default_domain.clone());
-
-        let content = get_file_content(&PathBuf::from(file));
-
-        {
-            let mut guard = self.domains.lock().unwrap();
-            guard
-                .entry(domain.clone())
-                .or_insert_with(DomainRoutes::new)
-                .code_routes
-                .insert(status_code, content.to_string());
-        }
-        self
-    }
-
-    /// Adds a route to a specific on error
-    ///
-    /// # Arguments
-    ///
-    /// * `route` - The path to open it.
-    /// * `external_url` - The url to the external service where to proxy too.
-    /// * `domain` - Optional reference to the domain; if None, uses default domain.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` on successful addition.
-    /// * `Err(String)` if the domain is not found.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use sunweb::webserver::responses::ResponseCodes;
-    /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
-    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let server = WebServer::new(config);
-    /// server.add_proxy_route("/", "https://github.com/Sunnickel", None);
-    /// ```
-    pub fn add_proxy_route(
-        &mut self,
-        route: &str,
-        external_url: &str,
-        domain: Option<&Domain>,
-    ) -> &mut Self {
-        let domain = domain
-            .cloned()
-            .unwrap_or_else(|| self.default_domain.clone());
-
-        {
-            let mut guard = self.domains.lock().unwrap();
-            guard
-                .entry(domain.clone())
-                .or_insert_with(DomainRoutes::new)
-                .proxy_route
-                .insert(route.to_string(), external_url.to_string());
-        }
-        self
-    }
-
     /// A logging middleware function that logs request and response details.
     ///
     /// # Arguments
@@ -472,35 +372,6 @@ impl WebServer {
                 .get("host")
                 .unwrap_or(&"<unknown>".to_string())
         );
-        response
-    }
-
-    /// A error page middleware function that allows to override 404 pages and more.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - Mutable reference to the incoming `Request`.
-    /// * `response` - The `Response` to be sent back.
-    /// * `domain_routes` - Just the domainroutes.
-    ///
-    /// # Returns
-    ///
-    /// The same `Response` passed in, unchanged.
-    ///
-    /// # Examples
-    ///
-    /// This function is used internally to replace error code pages.
-    pub(crate) fn errorpage(
-        request: &mut Request,
-        response: Response,
-        domain_routes: &DomainRoutes,
-    ) -> Response {
-        let status_code = response.headers.status;
-
-        if let Some(content) = domain_routes.code_routes.get(&status_code.clone()) {
-            return Response::new(Arc::new(content.to_string()), Some(status_code), None);
-        }
-
         response
     }
 }

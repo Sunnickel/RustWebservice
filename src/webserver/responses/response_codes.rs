@@ -44,7 +44,6 @@
 /// ```
 #[derive(Clone, Copy, Debug)]
 #[repr(u16)]
-#[derive(Eq, Hash, PartialEq)]
 pub enum ResponseCodes {
     // 1xx Informational
     Continue = 100,
