@@ -68,8 +68,7 @@ impl ServerConfig {
     ///
     /// # Returns
     ///
-    /// * `Ok(ServerConfig)` - The updated server configuration with TLS enabled.
-    /// * `Err(String)` - An error message if certificate parsing or TLS configuration fails.
+    /// * `ServerConfig` - The updated server configuration with TLS enabled.
     ///
     /// # Examples
     ///
@@ -80,26 +79,26 @@ impl ServerConfig {
     ///     .add_cert("private_key.pem".to_string(), "cert.pem".to_string())
     ///     .expect("Failed to add certificate");
     /// ```
-    pub fn add_cert(mut self, private_key_pem: String, cert_pem: String) -> Result<Self, String> {
+    pub fn add_cert(mut self, private_key_pem: String, cert_pem: String) -> Self {
         let certs: Result<Vec<_>, _> = CertificateDer::pem_file_iter(cert_pem)
             .unwrap()
             .collect::<Result<Vec<_>, _>>();
-        let certs = certs.map_err(|e| format!("Failed to parse certificates: {}", e))?;
+        let certs = certs.map_err(|e| format!("Failed to parse certificates: {}", e));
         let key: PrivateKeyDer = PrivateKeyDer::from_pem_file(private_key_pem).unwrap();
 
-        if certs.is_empty() {
-            return Err("No valid certificates found".to_string());
+        if certs.clone().unwrap().is_empty() {
+            panic!("Failed to parse certificates");
         }
 
         let tls_config = RustlsConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|e| format!("Failed to create TLS config: {}", e))?;
+            .with_single_cert(certs.unwrap(), key)
+            .map_err(|e| format!("Failed to create TLS config: {}", e));
 
-        self.tls_config = Some(Arc::new(tls_config));
+        self.tls_config = Some(Arc::new(tls_config.unwrap()));
         self.using_https = true;
 
-        Ok(self)
+        self
     }
 
     /// Sets the base domain for the server.

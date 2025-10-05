@@ -1,6 +1,6 @@
 [package]
 name = "sunweb"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2024"
 authors = ["Sunnickel"]
 categories = ["web-programming::http-server", "web-programming"]
@@ -16,3 +16,6 @@ chrono = "0.4.42"
 log = "0.4.28"
 rustls = "0.23.32"
 rustls-pki-types = "1.12.0"
+rustls-native-certs = "0.8.1"
+lazy_static = "1.5.0"
+memchr = "2.7.6"
