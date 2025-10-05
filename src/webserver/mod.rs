@@ -23,7 +23,7 @@ pub use crate::webserver::server_config::ServerConfig;
 use chrono::Utc;
 use log::{error, info, warn};
 use std::collections::HashMap;
-use std::net::TcpListener;
+use std::net::{Shutdown, TcpListener};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;

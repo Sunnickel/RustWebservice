@@ -1,8 +1,10 @@
 use log::warn;
-use rustls::{ClientConfig, ClientConnection, RootCertStore};
+use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, StreamOwned};
+use rustls_pki_types::ServerName;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 #[derive(Debug)]
 pub(crate) enum ProxySchema {
@@ -68,9 +70,12 @@ impl Proxy {
 
     pub(crate) fn connect_to_server(host: &str, port: u16) -> Option<TcpStream> {
         let address = format!("{}:{}", host, port);
-
         match TcpStream::connect(&address) {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .ok()?;
                 println!("Connected to {}", address);
                 Some(stream)
             }
@@ -86,23 +91,23 @@ impl Proxy {
         path: &str,
         host: &str,
     ) -> Option<Vec<u8>> {
-        // Return Vec<u8> instead of String
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: identity\r\n\r\n",
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept-Encoding: identity\r\n\r\n",
             path, host
         );
         stream.write_all(request.as_bytes()).ok()?;
 
         let mut buffer = Vec::new();
-        let mut chunk = [0u8; 4096];
+        let mut temp = [0u8; 8192];
 
         loop {
-            match stream.read(&mut chunk) {
+            match stream.read(&mut temp) {
                 Ok(0) => break,
-                Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                Ok(n) => buffer.extend_from_slice(&temp[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 Err(e) => {
                     warn!("Failed to read from socket: {}", e);
-                    return None;
+                    break;
                 }
             }
         }
@@ -119,85 +124,61 @@ impl Proxy {
         path: &str,
         host: &str,
     ) -> Option<Vec<u8>> {
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .ok()?;
+        static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
-        let mut root_store = RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs().certs {
-            root_store.add(cert).ok()?;
-        }
+        let config = TLS_CONFIG.get_or_init(|| {
+            let mut root_store = RootCertStore::empty();
+            if let (certs) = rustls_native_certs::load_native_certs() {
+                for cert in certs.certs {
+                    let _ = root_store.add(cert);
+                }
+            }
 
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
+            Arc::new(
+                ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth(),
+            )
+        });
 
-        let server_name = host.to_string().try_into().ok()?;
-        let mut conn = ClientConnection::new(Arc::new(config), server_name).ok()?;
+        let server_name = match ServerName::try_from(host.to_string()) {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
 
-        while conn.is_handshaking() {
-            conn.complete_io(stream).ok()?;
-        }
+        let mut conn = match ClientConnection::new(config.clone(), server_name) {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+
+        let mut tls_stream = StreamOwned::new(conn, stream);
 
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: identity\r\n\r\n",
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
             path, host
         );
 
-        conn.writer().write_all(request.as_bytes()).ok()?;
-        conn.complete_io(stream).ok()?;
-
-        let mut buffer = Vec::new();
-        let mut chunk = [0u8; 8192];
-        let mut headers_complete = false;
-        let mut is_chunked = false;
-
-        loop {
-            match conn.complete_io(stream) {
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
-                Err(_) => break,
-            }
-
-            let mut reader = conn.reader();
-            match reader.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    buffer.extend_from_slice(&chunk[..n]);
-
-                    if !headers_complete {
-                        if let Some(pos) = find_header_end(&buffer) {
-                            headers_complete = true;
-                            let headers = String::from_utf8_lossy(&buffer[..pos]);
-                            is_chunked = headers
-                                .to_lowercase()
-                                .contains("transfer-encoding: chunked");
-                        }
-                    }
-
-                    if headers_complete && is_chunked {
-                        if buffer.ends_with(b"0\r\n\r\n") || buffer.ends_with(b"\r\n0\r\n\r\n") {
-                            break;
-                        }
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(_) => break,
-            }
+        if tls_stream.write_all(request.as_bytes()).is_err() {
+            return None;
         }
 
-        Some(buffer)
-    }
+        let mut response = Vec::new();
+        if tls_stream.read_to_end(&mut response).is_err() {
+            return None;
+        }
 
+        Some(response)
+    }
     pub(crate) fn parse_http_response_bytes(response: &[u8]) -> (Vec<u8>, String) {
         if let Some(header_end) = find_header_end(response) {
             let headers_str = String::from_utf8_lossy(&response[..header_end]);
             let mut content_type = "text/html".to_string();
             let mut is_chunked = false;
+            let mut content_length = None;
 
             for line in headers_str.lines() {
-                if line.to_lowercase().starts_with("content-type:") {
+                let lower = line.to_lowercase();
+                if lower.starts_with("content-type:") {
                     content_type = line
                         .split(':')
                         .nth(1)
@@ -205,16 +186,22 @@ impl Proxy {
                         .trim()
                         .to_string();
                 }
-                if line.to_lowercase().starts_with("transfer-encoding:") {
-                    if line.to_lowercase().contains("chunked") {
-                        is_chunked = true;
-                    }
+                if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
+                    is_chunked = true;
+                }
+                if lower.starts_with("content-length:") {
+                    content_length = line
+                        .split(':')
+                        .nth(1)
+                        .and_then(|v| v.trim().parse::<usize>().ok());
                 }
             }
 
             let raw_body = &response[header_end + 4..];
             let body = if is_chunked {
                 decode_chunked_body(raw_body)
+            } else if let Some(len) = content_length {
+                raw_body[..std::cmp::min(len, raw_body.len())].to_vec()
             } else {
                 raw_body.to_vec()
             };
@@ -227,54 +214,41 @@ impl Proxy {
 }
 
 pub(crate) fn find_header_end(buffer: &[u8]) -> Option<usize> {
-    for i in 0..buffer.len().saturating_sub(3) {
-        if &buffer[i..i + 4] == b"\r\n\r\n" {
-            return Some(i);
-        }
-    }
-    None
+    buffer.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
-fn decode_chunked_body(body: &[u8]) -> Vec<u8> {
+fn decode_chunked_body(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     let mut pos = 0;
 
-    while pos < body.len() {
-        // Find the chunk size line (ends with \r\n)
-        let line_end = body[pos..]
-            .iter()
-            .position(|&b| b == b'\n')
-            .map(|p| pos + p);
+    while pos < data.len() {
+        // find line end (\r\n)
+        let line_end = match data[pos..].iter().position(|&b| b == b'\n') {
+            Some(end) => pos + end + 1,
+            None => break,
+        };
 
-        if line_end.is_none() {
-            break;
-        }
-
-        let line_end = line_end.unwrap();
-        let chunk_size_str = String::from_utf8_lossy(&body[pos..line_end]);
-        let chunk_size_str = chunk_size_str.trim();
-
-        // Parse hex chunk size
-        let chunk_size = match usize::from_str_radix(chunk_size_str, 16) {
-            Ok(size) => size,
+        let line_text = String::from_utf8_lossy(&data[pos..line_end]);
+        let size_line = line_text.trim().split(';').next().unwrap();
+        let size = match usize::from_str_radix(size_line, 16) {
+            Ok(s) => s,
             Err(_) => break,
         };
 
-        if chunk_size == 0 {
-            break; // Last chunk
-        }
-
-        // Extract chunk data
-        pos = line_end + 1;
-        if pos + chunk_size > body.len() {
+        if size == 0 {
             break;
         }
 
-        result.extend_from_slice(&body[pos..pos + chunk_size]);
-        pos += chunk_size;
+        pos = line_end;
+        if pos + size > data.len() {
+            break;
+        }
 
-        // Skip trailing \r\n after chunk
-        if pos + 2 <= body.len() && &body[pos..pos + 2] == b"\r\n" {
+        result.extend_from_slice(&data[pos..pos + size]);
+        pos += size;
+
+        // skip \r\n
+        if pos + 2 <= data.len() && &data[pos..pos + 2] == b"\r\n" {
             pos += 2;
         }
     }

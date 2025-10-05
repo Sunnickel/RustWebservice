@@ -4,7 +4,6 @@ use crate::webserver::proxy::{Proxy, ProxySchema, find_header_end};
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
 use crate::webserver::responses::ResponseCodes;
-use crate::webserver::responses::ResponseCodes::Processing;
 use crate::webserver::{Domain, DomainRoutes};
 use log::warn;
 use rustls::{ServerConfig, ServerConnection};
@@ -381,114 +380,18 @@ impl Client {
             .or_else(|| guard.get(&self.default_domain));
         if let Some(domain_routes) = domain_routes {
             if let Some(handler) = domain_routes.custom_routes.get(request.route.as_str()) {
-                catch_unwind(AssertUnwindSafe(|| handler(request, &current_domain))).unwrap_or_else(
-                    |_| {
-                        Response::new(
-                            Arc::from("<h1>500 Internal Server Error</h1>".to_string()),
-                            Some(ResponseCodes::InternalServerError),
-                            None,
-                        )
-                    },
-                )
+                execute_handler(handler, request, &current_domain)
             } else if let Some((_, folder)) =
                 find_static_folder(&domain_routes.static_routes, &request.route)
             {
-                let (content, content_type) = get_static_file_content(&request.route, folder);
-
-                if content == Arc::from(String::new()) {
-                    return Response::new(
-                        Arc::from("<h1>404 Not found</h1>".to_string()),
-                        Some(ResponseCodes::NotFound),
-                        None,
-                    );
-                }
-
-                let mut response = Response::new(content, None, None);
-                response.headers.add_header("Content-Type", &content_type);
-                response
+                get_static_file_response(folder, &request)
             } else if let Some((prefix, external)) =
                 find_proxy_route(&domain_routes.proxy_route, &request.route)
             {
-                let path = request.route.strip_prefix(prefix).unwrap_or(&request.route);
-                let mut proxy = Proxy::new(format!("{}{}", external, path));
-
-                if proxy.parse_url().is_none() {
-                    return Response::new(
-                        Arc::from("<h1>502 Bad Gateway - Invalid URL</h1>".to_string()),
-                        Some(ResponseCodes::BadGateway),
-                        None,
-                    );
-                }
-
-                let Some(mut stream) = Proxy::connect_to_server(&proxy.host, proxy.port) else {
-                    return Response::new(
-                        Arc::from("<h1>502 Bad Gateway - Connection Failed</h1>".to_string()),
-                        Some(ResponseCodes::BadGateway),
-                        None,
-                    );
-                };
-
-                let response_data = match proxy.scheme {
-                    ProxySchema::HTTP => {
-                        Proxy::send_http_request(&mut stream, &proxy.path, &proxy.host)
-                    }
-                    ProxySchema::HTTPS => {
-                        Proxy::send_https_request(&mut stream, &proxy.path, &proxy.host)
-                    }
-                };
-
-                if let Some(raw_response) = response_data {
-                    println!("=== RAW RESPONSE DEBUG ===");
-                    println!("Total bytes received: {}", raw_response.len());
-
-                    // Check for header separator
-                    if let Some(header_end) = find_header_end(&raw_response) {
-                        println!("Headers end at byte: {}", header_end);
-
-                        let headers = String::from_utf8_lossy(&raw_response[..header_end]);
-                        println!("Headers:\n{}", headers);
-
-                        let body_bytes = &raw_response[header_end + 4..];
-                        println!("Body length: {}", body_bytes.len());
-                        println!(
-                            "First 100 body bytes as hex: {:02x?}",
-                            &body_bytes[..body_bytes.len().min(100)]
-                        );
-                        println!(
-                            "First 100 body bytes as string: {}",
-                            String::from_utf8_lossy(&body_bytes[..body_bytes.len().min(100)])
-                        );
-                    } else {
-                        println!("NO HEADER SEPARATOR FOUND!");
-                        println!(
-                            "First 500 bytes: {}",
-                            String::from_utf8_lossy(&raw_response[..raw_response.len().min(500)])
-                        );
-                    }
-                    println!("=== END DEBUG ===");
-                    let (body_bytes, content_type) =
-                        Proxy::parse_http_response_bytes(&raw_response);
-                    println!("Body bytes length: {}", body_bytes.len());
-                    println!(
-                        "First 200 bytes: {:?}",
-                        &body_bytes[..body_bytes.len().min(200)]
-                    );
-                    let body_string = String::from_utf8_lossy(&body_bytes).to_string();
-                    let mut response =
-                        Response::new(Arc::from(body_string), Some(ResponseCodes::Ok), None);
-                    response.headers.add_header("Content-Type", &content_type);
-                    return response;
-                }
-
-                Response::new(
-                    Arc::from("<h1>502 Bad Gateway</h1>".to_string()),
-                    Some(ResponseCodes::BadGateway),
-                    None,
-                )
-            } else if let Some(resp) = domain_routes.routes.get(&request.route) {
-                Response::new(Arc::from(resp.clone()), Some(ResponseCodes::Ok), None)
+                get_proxy_route(prefix, external, &request)
+            } else if let Some(content) = domain_routes.routes.get(&request.route) {
+                Response::new(Arc::from(content.clone()), Some(ResponseCodes::Ok), None)
             } else {
-                // Return a 404 response if no route is found.
                 Response::new(
                     Arc::from("<h1>404 Not Found</h1>".to_string()),
                     Some(ResponseCodes::NotFound),
@@ -496,7 +399,6 @@ impl Client {
                 )
             }
         } else {
-            // Return a 404 response if no domain routes are found.
             Response::new(
                 Arc::from("<h1>404 Not Found</h1>".to_string()),
                 Some(ResponseCodes::NotFound),
@@ -504,6 +406,102 @@ impl Client {
             )
         }
     }
+}
+
+fn get_proxy_route(prefix: &str, external: &String, request: &Request) -> Response {
+    let path = format!(
+        "{}/{}",
+        prefix.trim_end_matches('/'),
+        request.route.strip_prefix(prefix).unwrap_or("")
+    );
+    let joined = if external.ends_with('/') {
+        format!("{}{}", &external.trim_end_matches('/'), path)
+    } else {
+        format!("{}{}", external, path)
+    };
+    let mut proxy = Proxy::new(joined);
+
+    if proxy.parse_url().is_none() {
+        return Response::new(
+            Arc::from("<h1>502 Bad Gateway - Invalid URL</h1>".to_string()),
+            Some(ResponseCodes::BadGateway),
+            None,
+        );
+    }
+
+    let Some(mut stream) = Proxy::connect_to_server(&proxy.host, proxy.port) else {
+        return Response::new(
+            Arc::from("<h1>502 Bad Gateway - Connection Failed</h1>".to_string()),
+            Some(ResponseCodes::BadGateway),
+            None,
+        );
+    };
+
+    let host_header = if proxy.port == 80 || proxy.port == 443 {
+        proxy.host.clone()
+    } else {
+        format!("{}:{}", proxy.host, proxy.port)
+    };
+
+    let response_data = match proxy.scheme {
+        ProxySchema::HTTP => Proxy::send_http_request(&mut stream, &proxy.path, &proxy.host),
+        ProxySchema::HTTPS => Proxy::send_https_request(&mut stream, &proxy.path, &proxy.host),
+    };
+
+    if let Some(raw_response) = response_data {
+        let (body_bytes, content_type) = Proxy::parse_http_response_bytes(&raw_response);
+        let body_string = String::from_utf8_lossy(&body_bytes).to_string();
+        let mut response = Response::new(Arc::from(body_string), Some(ResponseCodes::Ok), None);
+        response.headers.add_header("Content-Type", &content_type);
+
+        response
+            .headers
+            .add_header("Access-Control-Allow-Origin", "*");
+        response
+            .headers
+            .add_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        response
+            .headers
+            .add_header("Access-Control-Allow-Headers", "Content-Type");
+
+        return response;
+    }
+
+    Response::new(
+        Arc::from("<h1>502 Bad Gateway</h1>".to_string()),
+        Some(ResponseCodes::BadGateway),
+        None,
+    )
+}
+
+fn get_static_file_response(folder: &String, request: &Request) -> Response {
+    let (content, content_type) = get_static_file_content(&request.route, folder);
+
+    if content == Arc::from(String::new()) {
+        return Response::new(
+            Arc::from("<h1>404 Not found</h1>".to_string()),
+            Some(ResponseCodes::NotFound),
+            None,
+        );
+    }
+
+    let mut response = Response::new(content, None, None);
+    response.headers.add_header("Content-Type", &content_type);
+    response
+}
+
+fn execute_handler(
+    handler: &Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>,
+    request: Request,
+    current_domain: &Domain,
+) -> Response {
+    catch_unwind(AssertUnwindSafe(|| handler(request, current_domain))).unwrap_or_else(|_| {
+        Response::new(
+            Arc::from("<h1>500 Internal Server Error</h1>".to_string()),
+            Some(ResponseCodes::InternalServerError),
+            None,
+        )
+    })
 }
 
 fn find_static_folder<'a>(
