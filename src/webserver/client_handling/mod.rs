@@ -1,8 +1,10 @@
 use crate::webserver::files::get_static_file_content;
 use crate::webserver::middleware::{Middleware, MiddlewareFn};
+use crate::webserver::proxy::{Proxy, ProxySchema, find_header_end};
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
 use crate::webserver::responses::ResponseCodes;
+use crate::webserver::responses::ResponseCodes::Processing;
 use crate::webserver::{Domain, DomainRoutes};
 use log::warn;
 use rustls::{ServerConfig, ServerConnection};
@@ -294,6 +296,17 @@ impl Client {
                 MiddlewareFn::Both(_, res_func) => {
                     response = res_func(response);
                 }
+                MiddlewareFn::ResponseBothWithRoutes(func) => {
+                    response = func(
+                        &mut original_request,
+                        response,
+                        self.domains
+                            .lock()
+                            .unwrap()
+                            .get(&self.default_domain)
+                            .unwrap(),
+                    );
+                }
                 _ => continue,
             }
         }
@@ -317,13 +330,33 @@ impl Client {
     fn send_response(&mut self, response: Response) {
         let response_str = response.as_str();
         let response_bytes = response_str.as_bytes();
+
         if let Some(conn) = &mut self.tls_connection {
-            if let Err(e) = conn.writer().write_all(response_bytes) {
-                warn!("Error writing to TLS stream: {}", e);
-                return;
+            let chunk_size = 4096;
+            let mut offset = 0;
+
+            while offset < response_bytes.len() {
+                let end = (offset + chunk_size).min(response_bytes.len());
+                let chunk = &response_bytes[offset..end];
+
+                if let Err(e) = conn.writer().write(chunk) {
+                    warn!("Error writing to TLS stream: {}", e);
+                    return;
+                }
+
+                if let Err(e) = conn.complete_io(&mut self.stream) {
+                    warn!("Error completing TLS write: {}", e);
+                    return;
+                }
+
+                offset = end;
             }
-            if let Err(e) = conn.complete_io(&mut self.stream) {
-                warn!("Error completing TLS write: {}", e);
+
+            while conn.wants_write() {
+                if let Err(e) = conn.complete_io(&mut self.stream) {
+                    warn!("Error in final flush: {}", e);
+                    break;
+                }
             }
         } else {
             let _ = self.stream.write_all(response_bytes);
@@ -373,6 +406,85 @@ impl Client {
                 let mut response = Response::new(content, None, None);
                 response.headers.add_header("Content-Type", &content_type);
                 response
+            } else if let Some((prefix, external)) =
+                find_proxy_route(&domain_routes.proxy_route, &request.route)
+            {
+                let path = request.route.strip_prefix(prefix).unwrap_or(&request.route);
+                let mut proxy = Proxy::new(format!("{}{}", external, path));
+
+                if proxy.parse_url().is_none() {
+                    return Response::new(
+                        Arc::from("<h1>502 Bad Gateway - Invalid URL</h1>".to_string()),
+                        Some(ResponseCodes::BadGateway),
+                        None,
+                    );
+                }
+
+                let Some(mut stream) = Proxy::connect_to_server(&proxy.host, proxy.port) else {
+                    return Response::new(
+                        Arc::from("<h1>502 Bad Gateway - Connection Failed</h1>".to_string()),
+                        Some(ResponseCodes::BadGateway),
+                        None,
+                    );
+                };
+
+                let response_data = match proxy.scheme {
+                    ProxySchema::HTTP => {
+                        Proxy::send_http_request(&mut stream, &proxy.path, &proxy.host)
+                    }
+                    ProxySchema::HTTPS => {
+                        Proxy::send_https_request(&mut stream, &proxy.path, &proxy.host)
+                    }
+                };
+
+                if let Some(raw_response) = response_data {
+                    println!("=== RAW RESPONSE DEBUG ===");
+                    println!("Total bytes received: {}", raw_response.len());
+
+                    // Check for header separator
+                    if let Some(header_end) = find_header_end(&raw_response) {
+                        println!("Headers end at byte: {}", header_end);
+
+                        let headers = String::from_utf8_lossy(&raw_response[..header_end]);
+                        println!("Headers:\n{}", headers);
+
+                        let body_bytes = &raw_response[header_end + 4..];
+                        println!("Body length: {}", body_bytes.len());
+                        println!(
+                            "First 100 body bytes as hex: {:02x?}",
+                            &body_bytes[..body_bytes.len().min(100)]
+                        );
+                        println!(
+                            "First 100 body bytes as string: {}",
+                            String::from_utf8_lossy(&body_bytes[..body_bytes.len().min(100)])
+                        );
+                    } else {
+                        println!("NO HEADER SEPARATOR FOUND!");
+                        println!(
+                            "First 500 bytes: {}",
+                            String::from_utf8_lossy(&raw_response[..raw_response.len().min(500)])
+                        );
+                    }
+                    println!("=== END DEBUG ===");
+                    let (body_bytes, content_type) =
+                        Proxy::parse_http_response_bytes(&raw_response);
+                    println!("Body bytes length: {}", body_bytes.len());
+                    println!(
+                        "First 200 bytes: {:?}",
+                        &body_bytes[..body_bytes.len().min(200)]
+                    );
+                    let body_string = String::from_utf8_lossy(&body_bytes).to_string();
+                    let mut response =
+                        Response::new(Arc::from(body_string), Some(ResponseCodes::Ok), None);
+                    response.headers.add_header("Content-Type", &content_type);
+                    return response;
+                }
+
+                Response::new(
+                    Arc::from("<h1>502 Bad Gateway</h1>".to_string()),
+                    Some(ResponseCodes::BadGateway),
+                    None,
+                )
             } else if let Some(resp) = domain_routes.routes.get(&request.route) {
                 Response::new(Arc::from(resp.clone()), Some(ResponseCodes::Ok), None)
             } else {
@@ -403,4 +515,15 @@ fn find_static_folder<'a>(
         .filter(|(prefix, _)| route.starts_with(prefix.as_str()))
         .max_by_key(|(prefix, _)| prefix.len())
         .map(|(prefix, folder)| (prefix.as_str(), folder))
+}
+
+fn find_proxy_route<'a>(
+    proxy_routes: &'a HashMap<String, String>,
+    route: &str,
+) -> Option<(&'a str, &'a String)> {
+    proxy_routes
+        .iter()
+        .filter(|(prefix, _)| route.starts_with(prefix.as_str()))
+        .max_by_key(|(prefix, _)| prefix.len())
+        .map(|(prefix, url)| (prefix.as_str(), url))
 }

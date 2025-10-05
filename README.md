@@ -11,6 +11,7 @@ capabilities.
 - **Middleware System**: Flexible middleware for request/response processing
 - **Static File Serving**: Efficient static file serving with automatic MIME type detection
 - **Custom Route Handlers**: Define custom logic for specific routes
+- **Custom Error Managment**: Define sites that get shown when specific error get thrown
 - **Cookie Management**: Full cookie support with security attributes
 - **Colored Logging**: Built-in colored console logging for better visibility
 - **Thread-Per-Connection**: Handles each client connection in a separate thread
@@ -154,6 +155,7 @@ Main server instance:
 - ```add_static_route(route: &str, folder: &str, domain: Option<&Domain>)``` - Add static folder
 - ```add_custom_route(route: &str, handler: Fn, domain: Option<&Domain>)``` - Add custom handler
 - ```add_subdomain_router(domain: &Domain)``` - Enable subdomain routing
+- ```add_error_route(status_code: ResponseCodes, file: &str, domain: Option<&Domain>)``` - Add custom error-pages
 
 ### Response
 
