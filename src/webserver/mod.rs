@@ -9,8 +9,9 @@ pub(crate) mod files;
 pub(crate) mod logger;
 pub(crate) mod middleware;
 mod proxy;
-mod requests;
+pub mod requests;
 pub mod responses;
+pub mod route;
 pub(crate) mod server_config;
 
 use crate::webserver::client_handling::Client;
@@ -18,6 +19,7 @@ use crate::webserver::files::get_file_content;
 use crate::webserver::middleware::Middleware;
 use crate::webserver::requests::Request;
 use crate::webserver::responses::{Response, ResponseCodes};
+use crate::webserver::route::{HTTPMethod, Route, RouteType};
 pub use crate::webserver::server_config::ServerConfig;
 
 use chrono::Utc;
@@ -61,45 +63,12 @@ impl Domain {
     }
 }
 
-/// Holds routing information for a specific domain.
-#[derive(Clone)]
-pub(crate) struct DomainRoutes {
-    /// Map of route patterns to file content strings.
-    pub(crate) routes: HashMap<String, String>,
-    /// Map of route patterns to folder paths for static files.
-    pub(crate) static_routes: HashMap<String, String>,
-    /// Map of route patterns to custom route handlers.
-    pub(crate) custom_routes:
-        HashMap<String, Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>>,
-    /// Map of routes where to go after an Error or code.
-    pub(crate) code_routes: HashMap<ResponseCodes, String>,
-    /// The routes on the server where to proxy it too.
-    pub(crate) proxy_route: HashMap<String, String>,
-}
-
-impl DomainRoutes {
-    /// Creates a new `DomainRoutes` instance with empty maps.
-    ///
-    /// # Returns
-    ///
-    /// A new `DomainRoutes` instance.
-    pub(crate) fn new() -> DomainRoutes {
-        Self {
-            routes: HashMap::new(),
-            static_routes: HashMap::new(),
-            custom_routes: HashMap::new(),
-            code_routes: HashMap::new(),
-            proxy_route: HashMap::new(),
-        }
-    }
-}
-
 /// The main web server structure.
 pub struct WebServer {
     /// Server configuration including IP, port, and TLS settings.
     pub(crate) config: ServerConfig,
     /// Map of domains to their respective routing configurations.
-    pub(crate) domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+    pub(crate) domains: Arc<Mutex<HashMap<Domain, Arc<Mutex<Vec<Route>>>>>>,
     /// The default domain used for subdomain generation.
     pub(crate) default_domain: Domain,
     /// List of middleware functions to be applied to requests and responses.
@@ -127,7 +96,7 @@ impl WebServer {
     pub fn new(config: ServerConfig) -> WebServer {
         let mut domains = HashMap::new();
         let default_domain = Domain::new(&*config.base_domain);
-        domains.insert(default_domain.clone(), DomainRoutes::new());
+        domains.insert(default_domain.clone(), Arc::new(Mutex::new(Vec::new())));
         let mut middlewares = Vec::new();
         let logging_middleware = Middleware::new_response_both(None, None, Self::logging);
         let error_page_middleware =
@@ -218,7 +187,7 @@ impl WebServer {
         );
         guard
             .entry(Domain::new(&*domain_str))
-            .or_insert_with(DomainRoutes::new);
+            .or_insert_with(|| Arc::new(Mutex::new(Vec::new())));
     }
 
     /// Adds a file-based route to the specified domain.
@@ -226,26 +195,31 @@ impl WebServer {
     /// # Arguments
     ///
     /// * `route` - The route pattern to match (e.g., "/about").
+    /// * `method` - The HTTP method for this route.
     /// * `file_path` - The path to the file whose content will be served.
+    /// * `response_codes` - The response code for successful responses.
     /// * `domain` - Optional reference to the domain; if None, uses default domain.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` on successful addition.
-    /// * `Err(String)` if there's an error (e.g., file doesn't exist).
+    /// A mutable reference to self for method chaining.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use webserver::{WebServer, ServerConfig, Domain};
+    /// use webserver::route::HTTPMethod;
+    /// use webserver::responses::ResponseCodes;
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
-    /// server.add_route_file("/about", "./static/about.html", None);
+    /// server.add_route_file("/about", HTTPMethod::GET, "./static/about.html", ResponseCodes::Ok, None);
     /// ```
     pub fn add_route_file(
         &mut self,
         route: &str,
+        method: HTTPMethod,
         file_path: &str,
+        response_codes: ResponseCodes,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -256,12 +230,20 @@ impl WebServer {
 
         {
             let mut guard = self.domains.lock().unwrap();
-            guard
+            let domain_routes = guard
                 .entry(domain.clone())
-                .or_insert_with(DomainRoutes::new)
-                .routes
-                .insert(route.to_string(), content.to_string());
+                .or_insert_with(|| Arc::new(Mutex::new(Vec::new())));
+
+            let mut routes = domain_routes.lock().unwrap();
+            routes.push(Route::new_file(
+                route.to_string(),
+                method,
+                response_codes,
+                domain,
+                content,
+            ));
         }
+
         self
     }
 
@@ -270,46 +252,56 @@ impl WebServer {
     /// # Arguments
     ///
     /// * `route` - The route pattern to match (e.g., "/static").
+    /// * `method` - The HTTP method for this route.
     /// * `folder` - The path to the folder containing static files.
+    /// * `response_codes` - The response code for successful responses.
     /// * `domain` - Optional reference to the domain; if None, uses default domain.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` on successful addition.
-    /// * `Err(String)` if there's an error (e.g., folder doesn't exist).
+    /// A mutable reference to self for method chaining.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use webserver::{WebServer, ServerConfig, Domain};
+    /// use webserver::route::HTTPMethod;
+    /// use webserver::responses::ResponseCodes;
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
-    /// server.add_static_route("/assets", "./static/assets", None);
+    /// server.add_static_route("/assets", HTTPMethod::GET, "./static/assets", ResponseCodes::Ok, None);
     /// ```
     pub fn add_static_route(
         &mut self,
         route: &str,
+        method: HTTPMethod,
         folder: &str,
+        response_codes: ResponseCodes,
         domain: Option<&Domain>,
     ) -> &mut Self {
-        let domain = domain.unwrap_or_else(|| &self.default_domain);
+        let domain = domain
+            .cloned()
+            .unwrap_or_else(|| self.default_domain.clone());
+
         let folder_path = PathBuf::from(folder);
         if !folder_path.exists() {
             error!("Static route file does not exist");
         }
+
         {
             let mut guard = self.domains.lock().unwrap();
-            if !guard.contains_key(&domain) {
-                guard.insert(domain.clone(), DomainRoutes::new());
-            }
-            match guard.get_mut(&domain) {
-                Some(domain_routes) => {
-                    domain_routes
-                        .static_routes
-                        .insert(route.to_string(), folder.to_string());
-                }
-                None => error!("Domain not found: {}", domain.name),
-            }
+            let domain_routes = guard
+                .entry(domain.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(Vec::new())));
+
+            let mut routes = domain_routes.lock().unwrap();
+            routes.push(Route::new_static(
+                route.to_string(),
+                method,
+                response_codes,
+                domain,
+                String::from(folder),
+            ));
         }
         self
     }
@@ -319,41 +311,53 @@ impl WebServer {
     /// # Arguments
     ///
     /// * `route` - The route pattern to match (e.g., "/api").
+    /// * `method` - The HTTP method for this route.
     /// * `f` - A closure or function that takes a `Request` and `Domain` and returns a `Response`.
+    /// * `response_codes` - The response code for successful responses.
     /// * `domain` - Optional reference to the domain; if None, uses default domain.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` on successful addition.
-    /// * `Err(String)` if the domain is not found.
+    /// A mutable reference to self for method chaining.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
+    /// use webserver::route::HTTPMethod;
+    /// use webserver::responses::ResponseCodes;
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let server = WebServer::new(config);
-    /// server.add_custom_route("/api", |req, domain| {
+    /// let mut server = WebServer::new(config);
+    /// server.add_custom_route("/api", HTTPMethod::GET, |req, domain| {
     ///     // Custom logic here
     ///     Response::new(200, "Hello from API".to_string())
-    /// }, None);
+    /// }, ResponseCodes::Ok, None);
     /// ```
     pub fn add_custom_route(
         &mut self,
         route: &str,
+        method: HTTPMethod,
         f: impl Fn(Request, &Domain) -> Response + Send + Sync + 'static,
+        response_codes: ResponseCodes,
         domain: Option<&Domain>,
     ) -> &mut Self {
-        let domain = domain.unwrap_or_else(|| &self.default_domain);
+        let domain = domain
+            .cloned()
+            .unwrap_or_else(|| self.default_domain.clone());
         {
-            match self.domains.lock().unwrap().get_mut(&domain) {
-                Some(domain_routes) => {
-                    domain_routes
-                        .custom_routes
-                        .insert(route.to_string(), Arc::new(f));
-                }
-                None => error!("Domain not found: {}", domain.name),
-            }
+            let mut guard = self.domains.lock().unwrap();
+            let domain_routes = guard
+                .entry(domain.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(Vec::new())));
+
+            let mut routes = domain_routes.lock().unwrap();
+            routes.push(Route::new_custom(
+                route.to_string(),
+                method,
+                response_codes,
+                domain,
+                f,
+            ));
         }
         self
     }
@@ -364,12 +368,12 @@ impl WebServer {
     ///
     /// * `status_code` - The Code it should react on.
     /// * `file` - the file that will be shown on the code.
+    /// * `response_codes` - The response code configuration.
     /// * `domain` - Optional reference to the domain; if None, uses default domain.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` on successful addition.
-    /// * `Err(String)` if the domain is not found.
+    /// A mutable reference to self for method chaining.
     ///
     /// # Examples
     ///
@@ -377,13 +381,14 @@ impl WebServer {
     /// use sunweb::webserver::responses::ResponseCodes;
     /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let server = WebServer::new(config);
-    /// server.add_error_route(ResponseCodes::NotFound, "./resources/errors/404.html", None);
+    /// let mut server = WebServer::new(config);
+    /// server.add_error_route(ResponseCodes::NotFound, "./resources/errors/404.html", ResponseCodes::NotFound, None);
     /// ```
     pub fn add_error_route(
         &mut self,
         status_code: ResponseCodes,
         file: &str,
+        response_codes: ResponseCodes,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -394,27 +399,33 @@ impl WebServer {
 
         {
             let mut guard = self.domains.lock().unwrap();
-            guard
+            let domain_routes = guard
                 .entry(domain.clone())
-                .or_insert_with(DomainRoutes::new)
-                .code_routes
-                .insert(status_code, content.to_string());
+                .or_insert_with(|| Arc::new(Mutex::new(Vec::new())));
+
+            let mut routes = domain_routes.lock().unwrap();
+            routes.push(Route::new_error(
+                HTTPMethod::GET,
+                domain,
+                response_codes,
+                content,
+            ));
         }
         self
     }
 
-    /// Adds a route to a specific on error
+    /// Adds a proxy route to forward requests to an external service
     ///
     /// # Arguments
     ///
     /// * `route` - The path to open it.
     /// * `external_url` - The url to the external service where to proxy too.
+    /// * `response_codes` - The response code configuration.
     /// * `domain` - Optional reference to the domain; if None, uses default domain.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` on successful addition.
-    /// * `Err(String)` if the domain is not found.
+    /// A mutable reference to self for method chaining.
     ///
     /// # Examples
     ///
@@ -422,13 +433,14 @@ impl WebServer {
     /// use sunweb::webserver::responses::ResponseCodes;
     /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let server = WebServer::new(config);
-    /// server.add_proxy_route("/", "https://github.com/Sunnickel", None);
+    /// let mut server = WebServer::new(config);
+    /// server.add_proxy_route("/", "https://github.com/Sunnickel", ResponseCodes::Ok, None);
     /// ```
     pub fn add_proxy_route(
         &mut self,
         route: &str,
-        external_url: &str,
+        external: &str,
+        response_codes: ResponseCodes,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -437,11 +449,18 @@ impl WebServer {
 
         {
             let mut guard = self.domains.lock().unwrap();
-            guard
+            let domain_routes = guard
                 .entry(domain.clone())
-                .or_insert_with(DomainRoutes::new)
-                .proxy_route
-                .insert(route.to_string(), external_url.to_string());
+                .or_insert_with(|| Arc::new(Mutex::new(Vec::new())));
+
+            let mut routes = domain_routes.lock().unwrap();
+            routes.push(Route::new_proxy(
+                route.to_string(),
+                HTTPMethod::GET,
+                domain,
+                response_codes,
+                external.to_string(),
+            ));
         }
         self
     }
@@ -481,24 +500,29 @@ impl WebServer {
     ///
     /// * `request` - Mutable reference to the incoming `Request`.
     /// * `response` - The `Response` to be sent back.
-    /// * `domain_routes` - Just the domainroutes.
+    /// * `routes` - The routes vector for the current domain.
     ///
     /// # Returns
     ///
-    /// The same `Response` passed in, unchanged.
+    /// The same `Response` passed in, unchanged or a custom error page.
     ///
     /// # Examples
     ///
     /// This function is used internally to replace error code pages.
     pub(crate) fn errorpage(
-        request: &mut Request,
+        _request: &mut Request,
         response: Response,
-        domain_routes: &DomainRoutes,
+        routes: &Vec<Route>,
     ) -> Response {
         let status_code = response.headers.status;
 
-        if let Some(content) = domain_routes.code_routes.get(&status_code.clone()) {
-            return Response::new(Arc::new(content.to_string()), Some(status_code), None);
+        if let Some(route) = routes
+            .iter()
+            .find(|x| x.route_type == RouteType::Error && x.status_code == status_code)
+        {
+            if let Some(content) = &route.content {
+                return Response::new(content.clone(), Some(status_code), None);
+            }
         }
 
         response

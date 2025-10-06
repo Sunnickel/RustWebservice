@@ -1,16 +1,17 @@
 use crate::webserver::files::get_static_file_content;
 use crate::webserver::middleware::{Middleware, MiddlewareFn};
-use crate::webserver::proxy::{Proxy, ProxySchema, find_header_end};
+use crate::webserver::proxy::{Proxy, ProxySchema};
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
 use crate::webserver::responses::ResponseCodes;
-use crate::webserver::{Domain, DomainRoutes};
+use crate::webserver::route::{Route, RouteType};
+use crate::webserver::Domain;
 use log::warn;
 use rustls::{ServerConfig, ServerConnection};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
 
@@ -22,7 +23,7 @@ pub(crate) struct Client {
     /// The underlying TCP stream for communication with the client.
     stream: TcpStream,
     /// A map of domains to their route configurations, shared across threads.
-    domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+    domains: Arc<Mutex<HashMap<Domain, Arc<Mutex<Vec<Route>>>>>>,
     /// The default domain used when no matching domain is found.
     default_domain: Domain,
     /// List of middleware functions to apply to requests and responses.
@@ -49,7 +50,7 @@ impl Client {
     /// A new `Client` instance initialized with the provided parameters.
     pub(crate) fn new(
         stream: TcpStream,
-        domains: Arc<Mutex<HashMap<Domain, DomainRoutes>>>,
+        domains: Arc<Mutex<HashMap<Domain, Arc<Mutex<Vec<Route>>>>>>,
         default_domain: Domain,
         middleware: Arc<Vec<Middleware>>,
         tls_config: Option<Arc<ServerConfig>>,
@@ -299,10 +300,13 @@ impl Client {
                     response = func(
                         &mut original_request,
                         response,
-                        self.domains
+                        &*self
+                            .domains
                             .lock()
                             .unwrap()
                             .get(&self.default_domain)
+                            .unwrap()
+                            .lock()
                             .unwrap(),
                     );
                 }
@@ -374,37 +378,89 @@ impl Client {
     fn handle_routing(&mut self, request: Request) -> Response {
         let host = request.values.get("host").cloned().unwrap_or_default();
         let current_domain = Domain::new(&host);
+
         let guard = self.domains.lock().unwrap();
-        let domain_routes = guard
+        let routes_vec = guard
             .get(&current_domain)
             .or_else(|| guard.get(&self.default_domain));
-        if let Some(domain_routes) = domain_routes {
-            if let Some(handler) = domain_routes.custom_routes.get(request.route.as_str()) {
-                execute_handler(handler, request, &current_domain)
-            } else if let Some((_, folder)) =
-                find_static_folder(&domain_routes.static_routes, &request.route)
-            {
-                get_static_file_response(folder, &request)
-            } else if let Some((prefix, external)) =
-                find_proxy_route(&domain_routes.proxy_route, &request.route)
-            {
-                get_proxy_route(prefix, external, &request)
-            } else if let Some(content) = domain_routes.routes.get(&request.route) {
-                Response::new(Arc::from(content.clone()), Some(ResponseCodes::Ok), None)
-            } else {
-                Response::new(
-                    Arc::from("<h1>404 Not Found</h1>".to_string()),
-                    Some(ResponseCodes::NotFound),
-                    None,
-                )
-            }
-        } else {
-            Response::new(
+
+        let Some(routes_mutex) = routes_vec else {
+            return Response::new(
                 Arc::from("<h1>404 Not Found</h1>".to_string()),
                 Some(ResponseCodes::NotFound),
                 None,
-            )
+            );
+        };
+
+        let routes = routes_mutex.lock().unwrap();
+
+        let matched_prefix = routes.iter().find(|r| {
+            request.route.starts_with(&r.route)
+                && std::mem::discriminant(&r.method) == std::mem::discriminant(&request.method)
+        });
+
+        let route = match matched_prefix {
+            Some(r) => r,
+            None => {
+                return Response::new(
+                    Arc::from("<h1>404 Not Found</h1>".to_string()),
+                    Some(ResponseCodes::NotFound),
+                    None,
+                );
+            }
+        };
+
+        if let Some(exact) = routes.iter().find(|r| r.route == request.route) {
+            if std::mem::discriminant(&exact.method) != std::mem::discriminant(&request.method) {
+                return Response::new(
+                    Arc::from("<h1>405 Method Not Allowed</h1>".to_string()),
+                    Some(ResponseCodes::MethodNotAllowed),
+                    None,
+                );
+            }
         }
+
+        match route.route_type {
+            RouteType::Static => {
+                if let Some(folder) = &route.folder {
+                    return get_static_file_response(folder, &request);
+                }
+            }
+            RouteType::File => {
+                if let Some(content) = &route.content {
+                    return Response::new(content.clone(), Some(route.status_code.clone()), None);
+                }
+            }
+            RouteType::Custom => {
+                if let Some(f) = &route.f {
+                    return catch_unwind(AssertUnwindSafe(|| f(request, &route.domain)))
+                        .unwrap_or_else(|_| {
+                            Response::new(
+                                Arc::from("<h1>500 Internal Server Error</h1>".to_string()),
+                                Some(ResponseCodes::InternalServerError),
+                                None,
+                            )
+                        });
+                }
+            }
+            RouteType::Proxy => {
+                if let Some(external) = &route.external {
+                    return get_proxy_route(&route.route, external, &request);
+                }
+            }
+            RouteType::Error => {
+                if let Some(content) = &route.content {
+                    return Response::new(content.clone(), Some(route.status_code.clone()), None);
+                }
+            }
+        }
+
+        // Fallback if nothing matched or invalid route configuration
+        Response::new(
+            Arc::from("<h1>500 Internal Server Error</h1>".to_string()),
+            Some(ResponseCodes::InternalServerError),
+            None,
+        )
     }
 }
 

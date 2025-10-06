@@ -29,7 +29,7 @@ use std::sync::Arc;
 /// let content = Arc::new(String::from("<html><body>Hello World</body></html>"));
 /// let response = Response::new(content, None, None);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Response {
     pub headers: ResponseHeaders,
     pub content: Arc<String>,
@@ -61,7 +61,7 @@ impl Response {
         mut protocol: Option<String>,
     ) -> Response {
         if protocol.is_none() {
-            protocol = Some(String::from("HTTP/2"))
+            protocol = Some(String::from("HTTP/1.1"))
         }
         if code.is_none() {
             code = Some(ResponseCodes::Ok);
@@ -180,7 +180,7 @@ impl Response {
 ///     HashMap::new()
 /// );
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ResponseHeaders {
     pub(crate) protocol: String,
     pub(crate) status: ResponseCodes,

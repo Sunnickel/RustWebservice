@@ -1,5 +1,6 @@
-use crate::webserver::Domain;
 use crate::webserver::cookie::Cookie;
+use crate::webserver::route::HTTPMethod;
+use crate::webserver::Domain;
 use std::collections::HashMap;
 
 /// Represents an HTTP request received by the web server.
@@ -13,7 +14,7 @@ pub struct Request {
     /// The HTTP protocol version (e.g., "HTTP/1.1").
     pub protocol: String,
     /// The HTTP method (e.g., "GET", "POST").
-    pub method: String,
+    pub method: HTTPMethod,
     /// The requested route/path.
     pub route: String,
     /// A map of header key-value pairs.
@@ -51,10 +52,13 @@ impl Request {
     /// ```
     pub(crate) fn new(request: String, remote_addr: String) -> Option<Request> {
         let mut lines = request.lines();
-        let mut method: String = String::new();
-        let mut route: String = String::new();
-        let mut protocol: String = String::new();
-        let request_line = lines.next()?;
+
+        let mut method_str = String::new();
+        let mut route = String::new();
+        let mut protocol = String::new();
+
+        let request_line = lines.next()?; // first line e.g. "GET /index.html HTTP/1.1"
+
         for part in request_line.split_whitespace() {
             let upper = part.to_uppercase();
             if upper.starts_with("HTTP/") || upper.starts_with("HTTPS/") {
@@ -65,13 +69,27 @@ impl Request {
             {
                 route = part.to_string();
             } else {
-                method = part.to_string();
+                method_str = part.to_string();
             }
         }
+
+        // Convert the method string to HTTPMethod enum
+        let method = match method_str.as_str() {
+            "GET" => HTTPMethod::GET,
+            "POST" => HTTPMethod::POST,
+            "PUT" => HTTPMethod::PUT,
+            "DELETE" => HTTPMethod::DELETE,
+            "PATCH" => HTTPMethod::PATCH,
+            "OPTIONS" => HTTPMethod::OPTIONS,
+            "HEAD" => HTTPMethod::HEAD,
+            _ => HTTPMethod::GET,
+        };
+
         let values: HashMap<String, String> = lines
             .filter_map(|line| line.split_once(':'))
             .map(|(key, value)| (key.trim().to_lowercase(), value.trim().to_string()))
             .collect();
+
         Some(Self {
             protocol,
             method,

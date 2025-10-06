@@ -1,6 +1,7 @@
+use crate::webserver::Domain;
 use crate::webserver::requests::Request;
 use crate::webserver::responses::Response;
-use crate::webserver::{Domain, DomainRoutes};
+use crate::webserver::route::Route;
 
 /// Represents a function that can be used as middleware in the web server.
 ///
@@ -18,7 +19,7 @@ pub enum MiddlewareFn {
     Response(fn(&mut Response)),
     BothResponse(fn(&mut Request, Response) -> Response),
     Both(fn(Request) -> Request, fn(Response) -> Response),
-    ResponseBothWithRoutes(fn(&mut Request, Response, &DomainRoutes) -> Response),
+    ResponseBothWithRoutes(fn(&mut Request, Response, &Vec<Route>) -> Response),
 }
 
 /// A middleware component that can be applied to HTTP requests and responses.
@@ -241,7 +242,7 @@ impl Middleware {
     pub fn new_response_both_w_routes(
         domain: Option<Domain>,
         route: Option<String>,
-        f: fn(&mut Request, Response, &DomainRoutes) -> Response,
+        f: fn(&mut Request, Response, &Vec<Route>) -> Response,
     ) -> Middleware {
         Self {
             domain: domain.unwrap_or_else(|| Domain::new("*")),
