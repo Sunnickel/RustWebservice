@@ -418,6 +418,12 @@ impl Client {
                     None,
                 );
             }
+        } else {
+            return Response::new(
+                Arc::from("<h1>404 Not found</h1>".to_string()),
+                Some(ResponseCodes::MethodNotAllowed),
+                None,
+            );
         }
 
         match route.route_type {
