@@ -1,3 +1,6 @@
+﻿use crate::webserver::requests::HTTPRequest;
+use crate::webserver::responses::HTTPResponse;
+use chrono::Utc;
 use log::{Level, Metadata, Record};
 
 /// ANSI color code for red text.
@@ -95,4 +98,31 @@ impl log::Log for Logger {
     ///
     /// This implementation does nothing as the logger writes directly to stdout.
     fn flush(&self) {}
+}
+
+impl Logger {
+    pub(crate) fn log_request_start(request: &mut HTTPRequest) {
+        let host = request.host().map(|h| h.to_string()).unwrap_or_default();
+
+        print!(
+            "{}[INFO ]{}[{}] {} [{}] {}",
+            DIM,
+            RESET,
+            Utc::now().format("%Y-%m-%d %H:%M:%S"),
+            request.method,
+            host,
+            request.path
+        );
+    }
+
+    pub(crate) fn log_request_end(response: &mut HTTPResponse) {
+        let color = match response.status_code.as_u16() {
+            200..=299 => GREEN,
+            300..=399 => YELLOW,
+            400..=599 => RED,
+            _ => RESET,
+        };
+
+        println!(" {}-> {}{}{}", color, response.status_code, RESET, "");
+    }
 }
