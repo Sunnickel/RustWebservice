@@ -456,8 +456,20 @@ impl Client {
             }
         };
 
-        if std::mem::discriminant(&exact.method) != std::mem::discriminant(&request.method) {
-            return HTTPResponse::method_not_allowed();
+        if let Some(exact) = routes.iter().find(|r| r.route == request.route) {
+            if std::mem::discriminant(&exact.method) != std::mem::discriminant(&request.method) {
+                return Response::new(
+                    Arc::from("<h1>405 Method Not Allowed</h1>".to_string()),
+                    Some(ResponseCodes::MethodNotAllowed),
+                    None,
+                );
+            }
+        } else {
+            return Response::new(
+                Arc::from("<h1>404 Not found</h1>".to_string()),
+                Some(ResponseCodes::MethodNotAllowed),
+                None,
+            );
         }
 
         match exact.route_type {
