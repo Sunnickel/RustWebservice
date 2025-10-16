@@ -1,4 +1,5 @@
 use std::{
+    fs,
     fs::File,
     io::{BufReader, Read},
     path::{Path, PathBuf},
@@ -27,28 +28,33 @@ use std::{
 /// let (content, mime_type) = get_static_file_content("/static/css/style.css", "/var/www");
 /// assert_eq!(mime_type, "text/css");
 /// ```
-pub(crate) fn get_static_file_content<'a>(route: &str, folder: &String) -> (Arc<String>, String) {
-    if folder.split('/').last().unwrap() == route.replace("/", "") {
-        return (Arc::new(String::new()), String::new());
-    }
+pub(crate) fn get_static_file_content(route: &str, folder: &String) -> (Arc<String>, String) {
+    let mut route_trimmed = route.trim_start_matches('/');
 
-    let file_relative_path = route
-        .strip_prefix(folder)
-        .unwrap_or(route)
-        .trim_start_matches('/')
-        .split('/')
-        .collect::<Vec<_>>()[1];
-    let folder_path = Path::new(&folder).components().collect::<PathBuf>();
-    let file_path = folder_path.join(file_relative_path);
+    let parts: Vec<&str> = route.trim_start_matches('/').splitn(2, '/').collect();
+    let relative_path = if parts.len() > 1 { parts[1] } else { "" };
+    let file_path = Path::new(folder).join(relative_path);
+
+    log::debug!("Resolved static path: {}", file_path.display());
+
     let content_type = match file_path.extension().and_then(|e| e.to_str()) {
         Some("css") => "text/css",
         Some("js") => "application/javascript",
         Some("html") => "text/html",
         Some("json") => "application/json",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
         _ => "text/plain",
     };
-    let content = get_file_content(&file_path);
-    (content, content_type.to_string())
+
+    match fs::read_to_string(&file_path) {
+        Ok(content) => (Arc::new(content), content_type.to_string()),
+        Err(e) => {
+            log::warn!("Static file not found: {} ({})", file_path.display(), e);
+            (Arc::new(String::new()), String::from("text/plain"))
+        }
+    }
 }
 
 /// Reads the entire content of a file into an `Arc<String>`.

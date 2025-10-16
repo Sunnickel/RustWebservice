@@ -6,3 +6,5 @@
 /src/main.rs
 /.aiassistant/
 /resources/
+/http-client.private.env.json
+/asd.http
