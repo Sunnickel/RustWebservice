@@ -1,7 +1,9 @@
-﻿use crate::webserver::requests::Request;
-use crate::webserver::responses::{Response, ResponseCodes};
+mod http_method;
+
+use crate::webserver::requests::HTTPRequest;
+use crate::webserver::responses::{HTTPResponse, StatusCode};
+pub use crate::webserver::route::http_method::HTTPMethod;
 use crate::webserver::Domain;
-use std::fmt;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -14,51 +16,23 @@ pub(crate) enum RouteType {
 }
 
 #[derive(Clone)]
-pub enum HTTPMethod {
-    GET,
-    HEAD,
-    OPTIONS,
-    TRACE,
-    PUT,
-    DELETE,
-    POST,
-    PATCH,
-    CONNECT,
-}
-
-impl fmt::Display for HTTPMethod {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            HTTPMethod::GET => write!(f, "GET"),
-            HTTPMethod::POST => write!(f, "POST"),
-            HTTPMethod::PUT => write!(f, "PUT"),
-            HTTPMethod::DELETE => write!(f, "DELETE"),
-            HTTPMethod::PATCH => write!(f, "PATCH"),
-            HTTPMethod::OPTIONS => write!(f, "OPTIONS"),
-            HTTPMethod::HEAD => write!(f, "HEAD"),
-            _ => write!(f, "UNKNOWN"),
-        }
-    }
-}
-
-#[derive(Clone)]
 pub(crate) struct Route {
     pub(crate) route: String,
     pub(crate) domain: Domain,
     pub(crate) method: HTTPMethod,
     pub(crate) route_type: RouteType,
-    pub(crate) status_code: ResponseCodes,
+    pub(crate) status_code: StatusCode,
     pub(crate) external: Option<String>,
     pub(crate) content: Option<Arc<String>>,
     pub(crate) folder: Option<String>,
-    pub(crate) f: Option<Arc<dyn Fn(Request, &Domain) -> Response + Send + Sync>>,
+    pub(crate) f: Option<Arc<dyn Fn(HTTPRequest, &Domain) -> HTTPResponse + Send + Sync>>,
 }
 
 impl Route {
     pub(crate) fn new_file(
         route: String,
         method: HTTPMethod,
-        response_code: ResponseCodes,
+        response_code: StatusCode,
         domain: Domain,
         content: Arc<String>,
     ) -> Route {
@@ -78,9 +52,9 @@ impl Route {
     pub(crate) fn new_custom(
         route: String,
         method: HTTPMethod,
-        response_code: ResponseCodes,
+        response_code: StatusCode,
         domain: Domain,
-        f: impl Fn(Request, &Domain) -> Response + Send + Sync + 'static,
+        f: impl Fn(HTTPRequest, &Domain) -> HTTPResponse + Send + Sync + 'static,
     ) -> Route {
         Self {
             route,
@@ -98,7 +72,7 @@ impl Route {
     pub(crate) fn new_static(
         route: String,
         method: HTTPMethod,
-        response_code: ResponseCodes,
+        response_code: StatusCode,
         domain: Domain,
         folder: String,
     ) -> Route {
@@ -118,7 +92,7 @@ impl Route {
     pub(crate) fn new_error(
         method: HTTPMethod,
         domain: Domain,
-        response_code: ResponseCodes,
+        response_code: StatusCode,
         content: Arc<String>,
     ) -> Route {
         Self {
@@ -138,7 +112,7 @@ impl Route {
         route: String,
         method: HTTPMethod,
         domain: Domain,
-        response_code: ResponseCodes,
+        response_code: StatusCode,
         external: String,
     ) -> Route {
         Self {

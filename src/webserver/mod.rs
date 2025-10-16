@@ -4,8 +4,8 @@
 //! including domain handling, routing, middleware support, and request/response processing.
 
 mod client_handling;
-pub(crate) mod cookie;
 pub(crate) mod files;
+pub mod http_packet;
 pub(crate) mod logger;
 pub(crate) mod middleware;
 mod proxy;
@@ -17,19 +17,38 @@ pub(crate) mod server_config;
 use crate::webserver::client_handling::Client;
 use crate::webserver::files::get_file_content;
 use crate::webserver::middleware::Middleware;
-use crate::webserver::requests::Request;
-use crate::webserver::responses::{Response, ResponseCodes};
 use crate::webserver::route::{HTTPMethod, Route, RouteType};
 pub use crate::webserver::server_config::ServerConfig;
 
+use crate::webserver::http_packet::header::connection::ConnectionType;
+use crate::webserver::logger::Logger;
+use crate::webserver::requests::HTTPRequest;
+use crate::webserver::responses::{HTTPResponse, StatusCode};
 use chrono::Utc;
-use log::{error, info, warn};
+use log::{error, info, Level, LevelFilter, Log, Metadata, Record};
 use std::collections::HashMap;
-use std::net::{Shutdown, TcpListener};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// ANSI color code for red text.
+const RED: &str = "\x1b[31m";
+
+/// ANSI color code for yellow text.
+const YELLOW: &str = "\x1b[33m";
+
+/// ANSI color code for blue text.
+const BLUE: &str = "\x1b[34m";
+
+/// ANSI color code for green text.
+const GREEN: &str = "\x1b[32m";
+
+/// ANSI color code for dimmed text.
+const DIM: &str = "\x1b[2m";
+
+/// ANSI color code to reset text formatting.
+const RESET: &str = "\x1b[0m";
 /// Represents a domain name used for routing.
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub struct Domain {
@@ -98,11 +117,15 @@ impl WebServer {
         let default_domain = Domain::new(&*config.base_domain);
         domains.insert(default_domain.clone(), Arc::new(Mutex::new(Vec::new())));
         let mut middlewares = Vec::new();
-        let logging_middleware = Middleware::new_response_both(None, None, Self::logging);
+
+        let logging_start_middleware =
+            Middleware::new_request(None, None, Logger::log_request_start);
+        let logging_end_middleware = Middleware::new_response(None, None, Logger::log_request_end);
         let error_page_middleware =
             Middleware::new_response_both_w_routes(None, None, Self::errorpage);
 
-        middlewares.push(logging_middleware);
+        middlewares.push(logging_start_middleware);
+        middlewares.push(logging_end_middleware);
         middlewares.push(error_page_middleware);
 
         WebServer {
@@ -146,12 +169,29 @@ impl WebServer {
                 Ok(stream) => {
                     let domains = Arc::clone(&self.domains);
                     let middleware = Arc::clone(&self.middleware);
-                    let tls_config = self.config.tls_config.clone();
                     let default_domain = self.default_domain.clone();
+                    let tls_config = self.config.tls_config.clone();
+
                     thread::spawn(move || {
                         let mut client =
                             Client::new(stream, domains, default_domain, middleware, tls_config);
-                        client.handle();
+
+                        let mut i = 0;
+                        loop {
+                            match client.handle(i) {
+                                Some(connection_type) => match connection_type {
+                                    ConnectionType::KeepAlive => {
+                                        i += 1;
+                                        continue;
+                                    }
+                                    _ => {
+                                        error!("Connection closed: {connection_type}");
+                                        break;
+                                    }
+                                },
+                                None => break,
+                            };
+                        }
                     });
                 }
                 Err(e) => eprintln!("Connection failed: {e}"),
@@ -209,17 +249,17 @@ impl WebServer {
     /// ```rust
     /// use webserver::{WebServer, ServerConfig, Domain};
     /// use webserver::route::HTTPMethod;
-    /// use webserver::responses::ResponseCodes;
+    /// use webserver::responses::StatusCode;
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
-    /// server.add_route_file("/about", HTTPMethod::GET, "./static/about.html", ResponseCodes::Ok, None);
+    /// server.add_route_file("/about", HTTPMethod::GET, "./static/about.html", StatusCode::Ok, None);
     /// ```
     pub fn add_route_file(
         &mut self,
         route: &str,
         method: HTTPMethod,
         file_path: &str,
-        response_codes: ResponseCodes,
+        response_codes: StatusCode,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -266,17 +306,17 @@ impl WebServer {
     /// ```rust
     /// use webserver::{WebServer, ServerConfig, Domain};
     /// use webserver::route::HTTPMethod;
-    /// use webserver::responses::ResponseCodes;
+    /// use webserver::responses::StatusCode;
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
-    /// server.add_static_route("/assets", HTTPMethod::GET, "./static/assets", ResponseCodes::Ok, None);
+    /// server.add_static_route("/assets", HTTPMethod::GET, "./static/assets", StatusCode::Ok, None);
     /// ```
     pub fn add_static_route(
         &mut self,
         route: &str,
         method: HTTPMethod,
         folder: &str,
-        response_codes: ResponseCodes,
+        response_codes: StatusCode,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -312,7 +352,7 @@ impl WebServer {
     ///
     /// * `route` - The route pattern to match (e.g., "/api").
     /// * `method` - The HTTP method for this route.
-    /// * `f` - A closure or function that takes a `Request` and `Domain` and returns a `Response`.
+    /// * `f` - A closure or function that takes a `HTTPRequest` and `Domain` and returns a `HTTPResponse`.
     /// * `response_codes` - The response code for successful responses.
     /// * `domain` - Optional reference to the domain; if None, uses default domain.
     ///
@@ -323,22 +363,22 @@ impl WebServer {
     /// # Examples
     ///
     /// ```rust
-    /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
+    /// use webserver::{WebServer, ServerConfig, Domain, HTTPRequest, HTTPResponse};
     /// use webserver::route::HTTPMethod;
-    /// use webserver::responses::ResponseCodes;
+    /// use webserver::responses::StatusCode;
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
     /// server.add_custom_route("/api", HTTPMethod::GET, |req, domain| {
     ///     // Custom logic here
-    ///     Response::new(200, "Hello from API".to_string())
-    /// }, ResponseCodes::Ok, None);
+    ///     HTTPResponse::new(200, "Hello from API".to_string())
+    /// }, StatusCode::Ok, None);
     /// ```
     pub fn add_custom_route(
         &mut self,
         route: &str,
         method: HTTPMethod,
-        f: impl Fn(Request, &Domain) -> Response + Send + Sync + 'static,
-        response_codes: ResponseCodes,
+        f: impl Fn(HTTPRequest, &Domain) -> HTTPResponse + Send + Sync + 'static,
+        response_codes: StatusCode,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -378,17 +418,17 @@ impl WebServer {
     /// # Examples
     ///
     /// ```rust
-    /// use sunweb::webserver::responses::ResponseCodes;
-    /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
+    /// use sunweb::webserver::responses::StatusCode;
+    /// use webserver::{WebServer, ServerConfig, Domain, HTTPRequest, HTTPResponse};
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
-    /// server.add_error_route(ResponseCodes::NotFound, "./resources/errors/404.html", ResponseCodes::NotFound, None);
+    /// server.add_error_route(StatusCode::NotFound, "./resources/errors/404.html", StatusCode::NotFound, None);
     /// ```
     pub fn add_error_route(
         &mut self,
-        status_code: ResponseCodes,
+        status_code: StatusCode,
         file: &str,
-        response_codes: ResponseCodes,
+        response_codes: StatusCode,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -430,17 +470,17 @@ impl WebServer {
     /// # Examples
     ///
     /// ```rust
-    /// use sunweb::webserver::responses::ResponseCodes;
-    /// use webserver::{WebServer, ServerConfig, Domain, Request, Response};
+    /// use sunweb::webserver::responses::StatusCode;
+    /// use webserver::{WebServer, ServerConfig, Domain, HTTPRequest, HTTPResponse};
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
-    /// server.add_proxy_route("/", "https://github.com/Sunnickel", ResponseCodes::Ok, None);
+    /// server.add_proxy_route("/", "https://github.com/Sunnickel", StatusCode::Ok, None);
     /// ```
     pub fn add_proxy_route(
         &mut self,
         route: &str,
         external: &str,
-        response_codes: ResponseCodes,
+        response_codes: StatusCode,
         domain: Option<&Domain>,
     ) -> &mut Self {
         let domain = domain
@@ -465,63 +505,35 @@ impl WebServer {
         self
     }
 
-    /// A logging middleware function that logs request and response details.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - Mutable reference to the incoming `Request`.
-    /// * `response` - The `Response` to be sent back.
-    ///
-    /// # Returns
-    ///
-    /// The same `Response` passed in, unchanged.
-    ///
-    /// # Examples
-    ///
-    /// This function is used internally by the server for logging.
-    pub(crate) fn logging(request: &mut Request, response: Response) -> Response {
-        info!(
-            "[{}] {:<6} {:<30} -> {:3} (host: {})",
-            Utc::now().format("%Y-%m-%d %H:%M:%S"),
-            request.method,
-            request.route,
-            response.headers.get_status_code(),
-            request
-                .values
-                .get("host")
-                .unwrap_or(&"<unknown>".to_string())
-        );
-        response
-    }
-
     /// A error page middleware function that allows to override 404 pages and more.
     ///
     /// # Arguments
     ///
-    /// * `request` - Mutable reference to the incoming `Request`.
-    /// * `response` - The `Response` to be sent back.
+    /// * `request` - Mutable reference to the incoming `HTTPRequest`.
+    /// * `response` - The `HTTPResponse` to be sent back.
     /// * `routes` - The routes vector for the current domain.
     ///
     /// # Returns
     ///
-    /// The same `Response` passed in, unchanged or a custom error page.
+    /// The same `HTTPResponse` passed in, unchanged or a custom error page.
     ///
     /// # Examples
     ///
     /// This function is used internally to replace error code pages.
     pub(crate) fn errorpage(
-        _request: &mut Request,
-        response: Response,
+        _request: &mut HTTPRequest,
+        response: HTTPResponse,
         routes: &Vec<Route>,
-    ) -> Response {
-        let status_code = response.headers.status;
+    ) -> HTTPResponse {
+        let status_code = response.status_code;
 
         if let Some(route) = routes
             .iter()
             .find(|x| x.route_type == RouteType::Error && x.status_code == status_code)
         {
             if let Some(content) = &route.content {
-                return Response::new(content.clone(), Some(status_code), None);
+                let mut response = HTTPResponse::new(status_code);
+                response.set_body_string(content.to_string());
             }
         }
 
