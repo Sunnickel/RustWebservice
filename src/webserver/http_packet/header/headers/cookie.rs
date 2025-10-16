@@ -1,4 +1,4 @@
-use crate::webserver::Domain;
+﻿use crate::webserver::Domain;
 use chrono::{Duration, Utc};
 /// Represents the SameSite attribute for cookies.
 ///
@@ -235,5 +235,11 @@ impl Cookie {
     pub fn same_site(mut self, same_site: SameSite) -> Self {
         self.same_site = same_site;
         self
+    }
+}
+
+impl FromIterator<bool> for Cookie {
+    fn from_iter<I: IntoIterator<Item = bool>>(iter: I) -> Self {
+        iter.into_iter().collect()
     }
 }

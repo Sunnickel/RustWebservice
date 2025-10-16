@@ -1,5 +1,6 @@
+use log::{Level, LevelFilter};
 use rustls::ServerConfig as RustlsConfig;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 
 /// Configuration for the web server.
@@ -26,6 +27,8 @@ pub struct ServerConfig {
     pub(crate) tls_config: Option<Arc<RustlsConfig>>,
     /// The base domain used for the server.
     pub(crate) base_domain: String,
+    /// Level for the logger
+    pub(crate) level: LevelFilter,
 }
 
 impl ServerConfig {
@@ -53,6 +56,7 @@ impl ServerConfig {
             using_https: false,
             tls_config: None,
             base_domain: String::from("localhost"),
+            level: LevelFilter::Info,
         }
     }
 
@@ -149,5 +153,10 @@ impl ServerConfig {
             "{}.{}.{}.{}:{}",
             self.host[0], self.host[1], self.host[2], self.host[3], self.port
         )
+    }
+
+    pub(crate) fn set_max_logger_level(mut self, level: LevelFilter) -> Self {
+        self.level = level;
+        self
     }
 }
