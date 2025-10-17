@@ -60,7 +60,7 @@ impl CspBuilder {
     pub fn build(&self) -> String {
         self.directives
             .iter()
-            .map(|d| d.as_str())
+            .map(|directive: &CspDirective| directive.as_str())
             .collect::<Vec<_>>()
             .join("; ")
     }
