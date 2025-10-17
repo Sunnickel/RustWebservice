@@ -1,36 +1,62 @@
+use crate::webserver::http_packet::header::content_types::ContentType;
+use std::str::FromStr;
 use std::{
     fs,
     fs::File,
     io::{BufReader, Read},
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
-/// Retrieves the content and content type of a static file based on route and folder.
+/// Retrieves the content and MIME type of a static file based on a route and base folder.
 ///
-/// This function determines the file path relative to a given folder, reads the file's
-/// content, and infers its MIME type based on the file extension.
+/// This function maps a given route to a file path relative to a specified folder,
+/// reads the file's contents, and infers its MIME type from the file extension.
+/// If the file does not exist, it returns an empty string with `text/plain` as the MIME type.
 ///
 /// # Arguments
 ///
-/// * `route` - A string slice that holds the full route to the file.
-/// * `folder` - A string slice that holds the base folder path where files are located.
+/// * `route` - The route path to the file, e.g., `/static/css/style.css`.
+/// * `folder` - The base folder where static files are located.
 ///
 /// # Returns
 ///
 /// A tuple containing:
-/// * An `Arc<String>` with the file's content.
-/// * A `String` representing the inferred MIME type of the file.
+/// * `Arc<String>` — the file's content.
+/// * `String` — the inferred MIME type of the file.
+///
+/// # MIME Type Mapping
+///
+/// | Extension | MIME Type                  |
+/// |-----------|----------------------------|
+/// | css       | text/css                   |
+/// | js        | application/javascript     |
+/// | html      | text/html                  |
+/// | json      | application/json           |
+/// | png       | image/png                  |
+/// | jpg/jpeg  | image/jpeg                 |
+/// | svg       | image/svg+xml              |
+/// | other     | text/plain                 |
 ///
 /// # Examples
 ///
-/// ```
-/// let (content, mime_type) = get_static_file_content("/static/css/style.css", "/var/www");
+/// ```rust
+/// use std::fs;
+/// use std::sync::Arc;
+/// use tempfile::tempdir;
+/// use crate::webserver::files::get_static_file_content;
+///
+/// let dir = tempdir().unwrap();
+/// let folder = dir.path().to_str().unwrap().to_string();
+/// let file_path = format!("{}/style.css", folder);
+/// fs::write(&file_path, "body { color: red; }").unwrap();
+///
+/// let (content, mime_type) = get_static_file_content("/static/css/style.css", &folder);
+///
 /// assert_eq!(mime_type, "text/css");
+/// assert!(content.contains("color: red"));
 /// ```
-pub(crate) fn get_static_file_content(route: &str, folder: &String) -> (Arc<String>, String) {
-    let mut route_trimmed = route.trim_start_matches('/');
-
+pub(crate) fn get_static_file_content(route: &str, folder: &String) -> (Arc<String>, ContentType) {
     let parts: Vec<&str> = route.trim_start_matches('/').splitn(2, '/').collect();
     let relative_path = if parts.len() > 1 { parts[1] } else { "" };
     let file_path = Path::new(folder).join(relative_path);
@@ -49,36 +75,46 @@ pub(crate) fn get_static_file_content(route: &str, folder: &String) -> (Arc<Stri
     };
 
     match fs::read_to_string(&file_path) {
-        Ok(content) => (Arc::new(content), content_type.to_string()),
+        Ok(content) => (
+            Arc::new(content),
+            ContentType::from_str(content_type).expect("Could not parse ContentType!"),
+        ),
         Err(e) => {
             log::warn!("Static file not found: {} ({})", file_path.display(), e);
-            (Arc::new(String::new()), String::from("text/plain"))
+            (
+                Arc::new(String::new()),
+                ContentType::from_str("text/plain").expect("Could not parse ContentType!"),
+            )
         }
     }
 }
 
 /// Reads the entire content of a file into an `Arc<String>`.
 ///
-/// Opens the specified file and reads its contents into a string. This function
-/// panics if it fails to open or read the file.
+/// This function opens the specified file, reads its contents into a string,
+/// and returns it wrapped in an `Arc`. It will panic if the file cannot be opened
+/// or read. If the file does not exist, it returns an empty string.
 ///
 /// # Arguments
 ///
-/// * `file_path` - A reference to a `Path` that specifies the location of the file to read.
+/// * `file_path` - The path to the file to read.
 ///
 /// # Returns
 ///
-/// An `Arc<String>` containing the full content of the file.
+/// An `Arc<String>` containing the full file contents.
 ///
-/// # Errors
+/// # Panics
 ///
-/// This function will panic if the file cannot be opened or read.
+/// Panics if the file exists but cannot be opened or read successfully.
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust
 /// use std::path::Path;
-/// let content = get_file_content(&Path::new("example.txt"));
+/// use std::sync::Arc;
+/// use crate::webserver::files::get_file_content;
+///
+/// let content: Arc<String> = get_file_content(&Path::new("example.txt"));
 /// ```
 pub(crate) fn get_file_content(file_path: &Path) -> Arc<String> {
     if !Path::exists(file_path) {

@@ -1,6 +1,5 @@
-use log::{Level, LevelFilter};
 use rustls::ServerConfig as RustlsConfig;
-use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use std::sync::Arc;
 
 /// Configuration for the web server.
@@ -11,7 +10,7 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```rust
-/// use your_crate::webserver::server_config::ServerConfig;
+/// use sunweb::webserver::server_config::ServerConfig;
 ///
 /// let config = ServerConfig::new([127, 0, 0, 1], 8080)
 ///     .set_base_domain("example.com".to_string());
@@ -25,17 +24,15 @@ pub struct ServerConfig {
     pub(crate) using_https: bool,
     /// Optional TLS configuration for secure connections.
     pub(crate) tls_config: Option<Arc<RustlsConfig>>,
-    /// The base domain used for the server.
+    /// The base domain used for the server. Defaults to localhost.
     pub(crate) base_domain: String,
-    /// Level for the logger
-    pub(crate) level: LevelFilter,
 }
 
 impl ServerConfig {
     /// Creates a new `ServerConfig` with the specified host and port.
     ///
-    /// By default, HTTPS is disabled and no TLS configuration is set.
-    /// The base domain is initialized to "localhost".
+    /// By default, HTTPS is disabled, no TLS configuration is set,
+    /// and the base domain is initialized to `"localhost"`.
     ///
     /// # Arguments
     ///
@@ -45,7 +42,7 @@ impl ServerConfig {
     /// # Examples
     ///
     /// ```rust
-    /// use your_crate::webserver::server_config::ServerConfig;
+    /// use sunweb::webserver::server_config::ServerConfig;
     ///
     /// let config = ServerConfig::new([127, 0, 0, 1], 8080);
     /// ```
@@ -56,14 +53,13 @@ impl ServerConfig {
             using_https: false,
             tls_config: None,
             base_domain: String::from("localhost"),
-            level: LevelFilter::Info,
         }
     }
 
-    /// Adds TLS certificate and private key to the server configuration.
+    /// Adds TLS certificate configuration to the server.
     ///
-    /// This method enables HTTPS for the server by configuring TLS settings
-    /// with the provided certificate and private key files.
+    /// This method configures the server to use HTTPS with the provided private key and certificate files.
+    /// The certificate file must be PEM-encoded, and the private key file must be PEM-encoded as well.
     ///
     /// # Arguments
     ///
@@ -72,12 +68,17 @@ impl ServerConfig {
     ///
     /// # Returns
     ///
-    /// * `ServerConfig` - The updated server configuration with TLS enabled.
+    /// The updated `ServerConfig` with TLS enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the certificate or private key files cannot be read,
+    /// or if the certificates are malformed or empty.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use your_crate::webserver::server_config::ServerConfig;
+    /// use sunweb::webserver::server_config::ServerConfig;
     ///
     /// let config = ServerConfig::new([127, 0, 0, 1], 8080)
     ///     .add_cert("private_key.pem".to_string(), "cert.pem".to_string())
@@ -104,11 +105,10 @@ impl ServerConfig {
 
         self
     }
-
     /// Sets the base domain for the server.
     ///
-    /// This domain is used as a default for various server operations,
-    /// such as generating URLs or handling cookies.
+    /// This domain is used as a default for operations like generating URLs,
+    /// handling cookies, and subdomain routing.
     ///
     /// # Arguments
     ///
@@ -116,12 +116,12 @@ impl ServerConfig {
     ///
     /// # Returns
     ///
-    /// * `ServerConfig` - The updated server configuration with the new base domain.
+    /// The updated `ServerConfig` with the new base domain.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use your_crate::webserver::server_config::ServerConfig;
+    /// use sunweb::webserver::server_config::ServerConfig;
     ///
     /// let config = ServerConfig::new([127, 0, 0, 1], 8080)
     ///     .set_base_domain("example.com".to_string());
@@ -138,12 +138,12 @@ impl ServerConfig {
     ///
     /// # Returns
     ///
-    /// * `String` - A string in the format "ip.ip.ip.ip:port".
+    /// A string in the format `"ip.ip.ip.ip:port"`.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use your_crate::webserver::server_config::ServerConfig;
+    /// use sunweb::webserver::server_config::ServerConfig;
     ///
     /// let config = ServerConfig::new([127, 0, 0, 1], 8080);
     /// assert_eq!(config.ip_as_string(), "127.0.0.1:8080");
@@ -153,10 +153,5 @@ impl ServerConfig {
             "{}.{}.{}.{}:{}",
             self.host[0], self.host[1], self.host[2], self.host[3], self.port
         )
-    }
-
-    pub(crate) fn set_max_logger_level(mut self, level: LevelFilter) -> Self {
-        self.level = level;
-        self
     }
 }

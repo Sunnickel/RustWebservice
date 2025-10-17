@@ -21,14 +21,17 @@ const DIM: &str = "\x1b[2m";
 /// ANSI color code to reset text formatting.
 const RESET: &str = "\x1b[0m";
 
-/// A custom logger implementation that provides colored console output based on log level.
+/// A custom logger that provides colored console output based on log level.
 ///
 /// This logger uses ANSI escape codes to colorize log messages:
-/// - Error messages are displayed in red.
-/// - Trace messages are displayed dimmed.
-/// - Warning messages are displayed in yellow.
-/// - Info messages are displayed in blue.
-/// - Debug messages are displayed in green.
+/// - `Error` messages are displayed in red.
+/// - `Warn` messages are displayed in yellow.
+/// - `Info` messages are displayed in blue.
+/// - `Debug` messages are displayed in green.
+/// - `Trace` messages are displayed dimmed.
+///
+/// The logger implements the `log::Log` trait, allowing integration with
+/// the standard Rust `log` facade.
 ///
 /// # Examples
 ///
@@ -39,7 +42,8 @@ const RESET: &str = "\x1b[0m";
 /// # fn main() -> Result<(), SetLoggerError> {
 /// log::set_logger(&Logger).unwrap();
 /// log::set_max_level(log::LevelFilter::Trace);
-/// // Now logging will use the colored output
+/// log::error!("This will appear in red");
+/// log::info!("This will appear in blue");
 /// # Ok(())
 /// # }
 /// ```
@@ -48,59 +52,56 @@ pub struct Logger;
 impl log::Log for Logger {
     /// Determines if a log message should be processed based on its metadata.
     ///
-    /// This implementation checks if the log level of the metadata is less than or equal to
+    /// Returns `true` if the log level of the metadata is less than or equal to
     /// the maximum allowed log level set by `log::max_level()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `metadata` - The metadata associated with the log message.
-    ///
-    /// # Returns
-    ///
-    /// * `bool` - `true` if the message should be logged, `false` otherwise.
     fn enabled(&self, metadata: &Metadata) -> bool {
         metadata.level() <= log::max_level()
     }
 
     /// Logs a record with appropriate coloring based on its level.
     ///
-    /// This method checks if the record is enabled (using `enabled`) and then formats
-    /// and prints the message with color codes corresponding to its log level.
+    /// Messages are printed directly to stdout using ANSI color codes.
     ///
     /// # Arguments
     ///
-    /// * `record` - The log record to be processed and displayed.
+    /// * `record` - The log record to process and display.
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             match record.level() {
-                Level::Error => {
-                    // Full line in red
-                    println!("{}[ERROR] - {}{}", RED, record.args(), RESET);
-                }
-                Level::Trace => {
-                    // Full line dimmed
-                    println!("{}[TRACE] - {}{}", DIM, record.args(), RESET);
-                }
-                Level::Warn => {
-                    println!("{}[WARN ]{} - {}", YELLOW, RESET, record.args());
-                }
-                Level::Info => {
-                    println!("{}[INFO ]{} - {}", BLUE, RESET, record.args());
-                }
-                Level::Debug => {
-                    println!("{}[DEBUG]{} - {}", GREEN, RESET, record.args());
-                }
+                Level::Error => println!("{}[ERROR] - {}{}", RED, record.args(), RESET),
+                Level::Trace => println!("{}[TRACE] - {}{}", DIM, record.args(), RESET),
+                Level::Warn => println!("{}[WARN ]{} - {}", YELLOW, RESET, record.args()),
+                Level::Info => println!("{}[INFO ]{} - {}", BLUE, RESET, record.args()),
+                Level::Debug => println!("{}[DEBUG]{} - {}", GREEN, RESET, record.args()),
             }
         }
     }
 
     /// Flushes any buffered records.
     ///
-    /// This implementation does nothing as the logger writes directly to stdout.
+    /// This implementation does nothing because logging writes directly to stdout.
     fn flush(&self) {}
 }
 
 impl Logger {
+    /// Logs the start of an HTTP request.
+    ///
+    /// Prints the request method, host, and path along with a timestamp.
+    /// Output is dimmed for readability.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The HTTP request to log.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::webserver::logger::Logger;
+    /// use crate::webserver::requests::HTTPRequest;
+    ///
+    /// let mut req = HTTPRequest::new("GET", "/", None);
+    /// Logger::log_request_start(&mut req);
+    /// ```
     pub(crate) fn log_request_start(request: &mut HTTPRequest) {
         let host = request.host().map(|h| h.to_string()).unwrap_or_default();
 
@@ -115,6 +116,27 @@ impl Logger {
         );
     }
 
+    /// Logs the end of an HTTP request, including the response status code.
+    ///
+    /// Colors the status code based on the HTTP response class:
+    /// - `2xx` is green
+    /// - `3xx` is yellow
+    /// - `4xx` and `5xx` are red
+    /// - Others use the default color
+    ///
+    /// # Arguments
+    ///
+    /// * `response` - The HTTP response to log.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crate::webserver::logger::Logger;
+    /// use crate::webserver::responses::HTTPResponse;
+    ///
+    /// let mut res = HTTPResponse::new(200);
+    /// Logger::log_request_end(&mut res);
+    /// ```
     pub(crate) fn log_request_end(response: &mut HTTPResponse) {
         let color = match response.status_code.as_u16() {
             200..=299 => GREEN,
