@@ -1,19 +1,19 @@
+use crate::webserver::Domain;
 use crate::webserver::files::get_static_file_content;
 use crate::webserver::http_packet::header::connection::ConnectionType;
 use crate::webserver::http_packet::header::content_types::ContentType;
 use crate::webserver::middleware::{Middleware, MiddlewareFn};
 use crate::webserver::proxy::{Proxy, ProxySchema};
 use crate::webserver::requests::HTTPRequest;
-use crate::webserver::responses::status_code::StatusCode;
 use crate::webserver::responses::HTTPResponse;
+use crate::webserver::responses::status_code::StatusCode;
 use crate::webserver::route::{Route, RouteType};
-use crate::webserver::Domain;
 use log::{error, warn};
 use rustls::{ServerConfig, ServerConnection};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
@@ -80,7 +80,7 @@ impl Client {
     /// - Writes response data to the TCP stream.
     /// - May establish a TLS connection if `tls_config` is set.
     pub(crate) fn handle(&mut self, i: u32) -> Option<ConnectionType> {
-        let raw_request = if self.tls_config.is_some() && i <= 0 {
+        let raw_request = if self.tls_config.is_some() && i == 0 {
             match self.handle_tls_connection() {
                 Some(req) => req,
                 None => return None,
