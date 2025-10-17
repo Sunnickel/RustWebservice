@@ -1,26 +1,56 @@
+//! Tiny HTTP **and** HTTPS forward-proxy helper built on `rustls`.
+//!
+//! The crate is **not** a full-featured proxy; it only performs:
+//! 1. URL parsing (`Proxy`)
+//! 2. one-shot `GET` requests
+//! 3. minimal HTTP/1.1 response parsing (headers + chunked or `Content-Length` body)
+//!
+//! Timeouts are hard-coded to 5 s.  Keep-alive is **not** supported.
+
 use log::warn;
-use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, StreamOwned};
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
+use rustls_native_certs::load_native_certs;
 use rustls_pki_types::ServerName;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+/// Transport scheme inferred from the URL.
 #[derive(Debug)]
 pub(crate) enum ProxySchema {
+    /// Plain-text HTTP (port 80 by default).
     HTTP,
+    /// TLS-wrapped HTTPS (port 443 by default).
     HTTPS,
 }
 
+/// A very small HTTP/HTTPS client that can execute one `GET` request.
 pub(crate) struct Proxy {
+    /// Original URL supplied by the caller.
     url: String,
+    /// Extracted host name (not including port).
     pub(crate) host: String,
+    /// Port that will be connected to.
     pub(crate) port: u16,
+    /// Path + query + fragment (always starts with `/`).
     pub(crate) path: String,
+    /// Whether HTTPS or plain HTTP will be used.
     pub(crate) scheme: ProxySchema,
 }
 
 impl Proxy {
+    /// Creates an **uninitialised** proxy.
+    ///
+    /// You **must** call [`parse_url`](Self::parse_url) before using any other
+    /// method; all other functions assume a successfully parsed URL.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let mut p = Proxy::new("https://example.com/api".into());
+    /// assert!(p.parse_url().is_some());
+    /// ```
     pub(crate) fn new(url: String) -> Self {
         Self {
             url,
@@ -31,6 +61,11 @@ impl Proxy {
         }
     }
 
+    /// Splits the stored URL into `(scheme, host, port, path)`.
+    ///
+    /// Returns `None` for malformed URLs or unsupported schemes (only `http`
+    /// and `https` are recognised).  On success, the fields `host`, `port`,
+    /// `path`, and `scheme` are updated in place.
     pub(crate) fn parse_url(&mut self) -> Option<()> {
         let mut parts = self.url.splitn(2, "://");
         let scheme = parts.next()?.to_lowercase();
@@ -68,10 +103,14 @@ impl Proxy {
         Some(())
     }
 
+    /// Opens a **TCP** connection to `(host, port)` with a 5 s read/write timeout.
+    ///
+    /// Logs a warning on failure.  The returned stream is ready for plain HTTP
+    /// **or** can be wrapped in TLS for HTTPS.
     pub(crate) fn connect_to_server(host: &str, port: u16) -> Option<TcpStream> {
         let address = format!("{}:{}", host, port);
         match TcpStream::connect(&address) {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
                 stream
                     .set_write_timeout(Some(Duration::from_secs(5)))
@@ -86,6 +125,20 @@ impl Proxy {
         }
     }
 
+    /// Sends a minimal HTTP/1.1 `GET` request and reads the response **until
+    /// the server closes the connection**.
+    ///
+    /// `Connection: close` and `Accept-Encoding: identity` are automatically
+    /// sent.  The returned buffer contains the **raw** HTTP response (status
+    /// line + headers + body).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let mut stream = Proxy::connect_to_server("example.com", 80)?;
+    /// let raw = Proxy::send_http_request(&mut stream, "/index.html", "example.com")?;
+    /// let (body, mime) = Proxy::parse_http_response_bytes(&raw);
+    /// ```
     pub(crate) fn send_http_request(
         stream: &mut TcpStream,
         path: &str,
@@ -119,6 +172,11 @@ impl Proxy {
         }
     }
 
+    /// Upgrades the TCP stream with rustls, then performs the same logic as
+    /// [`send_http_request`](Self::send_http_request).
+    ///
+    /// Server certificate validation uses the native root store (loaded once
+    /// via `OnceLock`).  ALPN, SNI, and TLS 1.3 are handled automatically.
     pub(crate) fn send_https_request(
         stream: &mut TcpStream,
         path: &str,
@@ -128,10 +186,9 @@ impl Proxy {
 
         let config = TLS_CONFIG.get_or_init(|| {
             let mut root_store = RootCertStore::empty();
-            if let (certs) = rustls_native_certs::load_native_certs() {
-                for cert in certs.certs {
-                    let _ = root_store.add(cert);
-                }
+            let certs = load_native_certs();
+            for cert in certs.certs {
+                let _ = root_store.add(cert);
             }
 
             Arc::new(
@@ -146,7 +203,7 @@ impl Proxy {
             Err(_) => return None,
         };
 
-        let mut conn = match ClientConnection::new(config.clone(), server_name) {
+        let conn = match ClientConnection::new(config.clone(), server_name) {
             Ok(c) => c,
             Err(_) => return None,
         };
@@ -169,6 +226,22 @@ impl Proxy {
 
         Some(response)
     }
+
+    /// Minimal HTTP response parser.
+    ///
+    /// Returns `(body_bytes, content_type_string)`:
+    /// - `Content-Length` and `Transfer-Encoding: chunked` are recognised
+    /// - Headers are **not** exposed; only the body and the `Content-Type`
+    ///   value are returned
+    /// - If the response is malformed, the whole input is returned as the body
+    ///   and `text/html` is assumed
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let raw = Proxy::send_https_request(&mut tls_stream, "/api", "api.example.com")?;
+    /// let (json, _mime) = Proxy::parse_http_response_bytes(&raw);
+    /// ```
     pub(crate) fn parse_http_response_bytes(response: &[u8]) -> (Vec<u8>, String) {
         if let Some(header_end) = find_header_end(response) {
             let headers_str = String::from_utf8_lossy(&response[..header_end]);
@@ -213,10 +286,15 @@ impl Proxy {
     }
 }
 
+/// Returns the index of the first `\r\n\r\n` sequence, marking the end of
+/// HTTP headers.
 pub(crate) fn find_header_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
+/// Decodes a **chunked** HTTP body (RFC 9112 §7.1).
+///
+/// Stops at the final zero-length chunk; trailers are ignored.
 fn decode_chunked_body(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     let mut pos = 0;

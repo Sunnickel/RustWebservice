@@ -1,8 +1,31 @@
-//! A web server implementation with domain routing capabilities.
 //!
-//! This module provides the core components for building a web server,
-//! including domain handling, routing, middleware support, and request/response processing.
-
+//! It is designed to allow creating route handlers for static files, dynamic content,
+//! proxying, and custom error pages. Most functions operate on `WebServer` instances
+//! and internal utility types like `Domain` and `Route`.
+//!
+//! # Example
+//!
+//! ```rust
+//! use webserver::{WebServer, ServerConfig, Domain};
+//! use webserver::route::HTTPMethod;
+//! use webserver::responses::StatusCode;
+//!
+//! // Create a basic configuration
+//! let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
+//! let mut server = WebServer::new(config);
+//!
+//! // Add a custom route
+//! server.add_custom_route("/api", HTTPMethod::GET, |_req, _domain| {
+//!     // Return a simple HTTP response
+//!     webserver::responses::HTTPResponse::new(200, "Hello API".to_string())
+//! }, StatusCode::Ok, None);
+//!
+//! // Add a file route
+//! server.add_route_file("/about", HTTPMethod::GET, "./static/about.html", StatusCode::Ok, None);
+//!
+//! // Add a static folder route
+//! server.add_static_route("/assets", HTTPMethod::GET, "./static/assets", StatusCode::Ok, None);
+//! ```
 mod client_handling;
 pub(crate) mod files;
 pub mod http_packet;
@@ -24,31 +47,13 @@ use crate::webserver::http_packet::header::connection::ConnectionType;
 use crate::webserver::logger::Logger;
 use crate::webserver::requests::HTTPRequest;
 use crate::webserver::responses::{HTTPResponse, StatusCode};
-use chrono::Utc;
-use log::{error, info, Level, LevelFilter, Log, Metadata, Record};
+use log::{error, info};
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// ANSI color code for red text.
-const RED: &str = "\x1b[31m";
-
-/// ANSI color code for yellow text.
-const YELLOW: &str = "\x1b[33m";
-
-/// ANSI color code for blue text.
-const BLUE: &str = "\x1b[34m";
-
-/// ANSI color code for green text.
-const GREEN: &str = "\x1b[32m";
-
-/// ANSI color code for dimmed text.
-const DIM: &str = "\x1b[2m";
-
-/// ANSI color code to reset text formatting.
-const RESET: &str = "\x1b[0m";
 /// Represents a domain name used for routing.
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub struct Domain {
@@ -61,28 +66,34 @@ impl Domain {
     ///
     /// # Arguments
     ///
-    /// * `name` - A string slice that holds the domain name.
+    /// * `name` - The domain name as a string slice.
     ///
     /// # Returns
     ///
-    /// A new `Domain` instance with the specified name.
+    /// A new `Domain` instance.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use webserver::Domain;
+    /// let domain = Domain::new("api");
+    /// assert_eq!(domain.as_str(), "api");
+    /// ```
     pub fn new(name: &str) -> Domain {
         Self {
             name: name.to_string(),
         }
     }
 
-    /// Returns the domain name as a string.
-    ///
-    /// # Returns
-    ///
-    /// The domain name as a `String`.
+    /// Returns the domain name as a `String`.
     pub fn as_str(&self) -> String {
         self.name.clone()
     }
 }
 
 /// The main web server structure.
+///
+/// Handles configuration, domains, routes, and middleware.
 pub struct WebServer {
     /// Server configuration including IP, port, and TLS settings.
     pub(crate) config: ServerConfig,
@@ -90,7 +101,7 @@ pub struct WebServer {
     pub(crate) domains: Arc<Mutex<HashMap<Domain, Arc<Mutex<Vec<Route>>>>>>,
     /// The default domain used for subdomain generation.
     pub(crate) default_domain: Domain,
-    /// List of middleware functions to be applied to requests and responses.
+    /// List of middleware functions to apply to requests/responses.
     pub(crate) middleware: Arc<Vec<Middleware>>,
 }
 
@@ -99,22 +110,22 @@ impl WebServer {
     ///
     /// # Arguments
     ///
-    /// * `config` - A `ServerConfig` struct containing server settings.
+    /// * `config` - The `ServerConfig` object containing server settings.
     ///
     /// # Returns
     ///
-    /// A new `WebServer` instance.
+    /// A new `WebServer` instance with default middleware registered.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```rust
-    /// use webserver::ServerConfig;
+    /// use webserver::{WebServer, ServerConfig};
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let server = WebServer::new(config);
     /// ```
     pub fn new(config: ServerConfig) -> WebServer {
         let mut domains = HashMap::new();
-        let default_domain = Domain::new(&*config.base_domain);
+        let default_domain = Domain::new(&config.base_domain);
         domains.insert(default_domain.clone(), Arc::new(Mutex::new(Vec::new())));
         let mut middlewares = Vec::new();
 
@@ -122,7 +133,7 @@ impl WebServer {
             Middleware::new_request(None, None, Logger::log_request_start);
         let logging_end_middleware = Middleware::new_response(None, None, Logger::log_request_end);
         let error_page_middleware =
-            Middleware::new_response_both_w_routes(None, None, Self::errorpage);
+            Middleware::new_response_both_w_routes(None, None, Self::error_page);
 
         middlewares.push(logging_start_middleware);
         middlewares.push(logging_end_middleware);
@@ -136,23 +147,14 @@ impl WebServer {
         }
     }
 
-    /// Starts the web server and begins listening for incoming connections.
+    /// Starts the web server.
     ///
-    /// # Side Effects
+    /// This will bind the server to the configured IP and port, spawn threads to handle
+    /// incoming connections, and apply registered middleware to all requests.
     ///
-    /// * Binds to the configured IP address and port.
-    /// * Spawns new threads for each incoming connection.
-    /// * Logs server start information.
+    /// # Panics
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use webserver::ServerConfig;
-    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let mut server = WebServer::new(config);
-    /// // Note: This will block the calling thread
-    /// server.start();
-    /// ```
+    /// This function will panic if the server fails to bind to the IP/port.
     pub fn start(&self) {
         let bind_addr = self.config.ip_as_string();
         let listener = TcpListener::bind(&bind_addr).unwrap();
@@ -199,17 +201,13 @@ impl WebServer {
         }
     }
 
-    /// Adds a new subdomain router for the specified domain.
+    /// Adds a subdomain router for the specified domain.
     ///
     /// # Arguments
     ///
-    /// * `domain` - A reference to the `Domain` to add as a subdomain.
+    /// * `domain` - A reference to the `Domain` to register.
     ///
-    /// # Side Effects
-    ///
-    /// * Inserts a new entry in the domains map with the full subdomain name.
-    ///
-    /// # Examples
+    /// # Example
     ///
     /// ```rust
     /// use webserver::{WebServer, ServerConfig, Domain};
@@ -230,30 +228,15 @@ impl WebServer {
             .or_insert_with(|| Arc::new(Mutex::new(Vec::new())));
     }
 
-    /// Adds a file-based route to the specified domain.
+    /// Adds a file-based route to the server.
     ///
     /// # Arguments
     ///
-    /// * `route` - The route pattern to match (e.g., "/about").
-    /// * `method` - The HTTP method for this route.
-    /// * `file_path` - The path to the file whose content will be served.
-    /// * `response_codes` - The response code for successful responses.
-    /// * `domain` - Optional reference to the domain; if None, uses default domain.
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use webserver::{WebServer, ServerConfig, Domain};
-    /// use webserver::route::HTTPMethod;
-    /// use webserver::responses::StatusCode;
-    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let mut server = WebServer::new(config);
-    /// server.add_route_file("/about", HTTPMethod::GET, "./static/about.html", StatusCode::Ok, None);
-    /// ```
+    /// * `route` - The URL path to match (e.g., "/about").
+    /// * `method` - HTTP method for the route.
+    /// * `file_path` - Local path to the file to serve.
+    /// * `response_codes` - Status code to respond with.
+    /// * `domain` - Optional `Domain`; defaults to the default domain.
     pub fn add_route_file(
         &mut self,
         route: &str,
@@ -287,30 +270,15 @@ impl WebServer {
         self
     }
 
-    /// Adds a static file route to the specified domain.
+    /// Adds a static folder route (serving all files in a directory).
     ///
     /// # Arguments
     ///
-    /// * `route` - The route pattern to match (e.g., "/static").
-    /// * `method` - The HTTP method for this route.
-    /// * `folder` - The path to the folder containing static files.
-    /// * `response_codes` - The response code for successful responses.
-    /// * `domain` - Optional reference to the domain; if None, uses default domain.
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use webserver::{WebServer, ServerConfig, Domain};
-    /// use webserver::route::HTTPMethod;
-    /// use webserver::responses::StatusCode;
-    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let mut server = WebServer::new(config);
-    /// server.add_static_route("/assets", HTTPMethod::GET, "./static/assets", StatusCode::Ok, None);
-    /// ```
+    /// * `route` - The URL path to match (e.g., "/static").
+    /// * `method` - HTTP method.
+    /// * `folder` - Local folder path containing static files.
+    /// * `response_codes` - Status code for successful responses.
+    /// * `domain` - Optional `Domain`; defaults to the default domain.
     pub fn add_static_route(
         &mut self,
         route: &str,
@@ -346,31 +314,19 @@ impl WebServer {
         self
     }
 
-    /// Adds a custom route handler to the specified domain.
+    /// Adds a custom route with a handler function.
     ///
-    /// # Arguments
-    ///
-    /// * `route` - The route pattern to match (e.g., "/api").
-    /// * `method` - The HTTP method for this route.
-    /// * `f` - A closure or function that takes a `HTTPRequest` and `Domain` and returns a `HTTPResponse`.
-    /// * `response_codes` - The response code for successful responses.
-    /// * `domain` - Optional reference to the domain; if None, uses default domain.
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining.
-    ///
-    /// # Examples
+    /// # Example
     ///
     /// ```rust
     /// use webserver::{WebServer, ServerConfig, Domain, HTTPRequest, HTTPResponse};
     /// use webserver::route::HTTPMethod;
     /// use webserver::responses::StatusCode;
+    ///
     /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
     /// let mut server = WebServer::new(config);
-    /// server.add_custom_route("/api", HTTPMethod::GET, |req, domain| {
-    ///     // Custom logic here
-    ///     HTTPResponse::new(200, "Hello from API".to_string())
+    /// server.add_custom_route("/api", HTTPMethod::GET, |_request, _domain| {
+    ///     HTTPResponse::new(200, "Hello API".to_string())
     /// }, StatusCode::Ok, None);
     /// ```
     pub fn add_custom_route(
@@ -402,31 +358,19 @@ impl WebServer {
         self
     }
 
-    /// Adds a route to a specific on error
+    /// Adds a custom error page route.
+    ///
+    /// This allows replacing default error pages (like 404 Not Found or 500 Internal Server Error)
+    /// with custom HTML content from a local file. The provided file will be served whenever
+    /// the specified status code occurs.
     ///
     /// # Arguments
     ///
-    /// * `status_code` - The Code it should react on.
-    /// * `file` - the file that will be shown on the code.
-    /// * `response_codes` - The response code configuration.
-    /// * `domain` - Optional reference to the domain; if None, uses default domain.
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use sunweb::webserver::responses::StatusCode;
-    /// use webserver::{WebServer, ServerConfig, Domain, HTTPRequest, HTTPResponse};
-    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let mut server = WebServer::new(config);
-    /// server.add_error_route(StatusCode::NotFound, "./resources/errors/404.html", StatusCode::NotFound, None);
-    /// ```
+    /// * `file` - Path to the HTML file to serve as the error page.
+    /// * `response_codes` - Status code that this error page corresponds to (e.g., `StatusCode::NotFound`).
+    /// * `domain` - Optional domain reference; if `None`, the default domain is used.
     pub fn add_error_route(
         &mut self,
-        status_code: StatusCode,
         file: &str,
         response_codes: StatusCode,
         domain: Option<&Domain>,
@@ -454,28 +398,17 @@ impl WebServer {
         self
     }
 
-    /// Adds a proxy route to forward requests to an external service
+    /// Adds a proxy route to forward requests to an external service.
+    ///
+    /// Incoming requests matching `route` will be forwarded to `external` URL.
+    /// This is useful for integrating microservices or external APIs.
     ///
     /// # Arguments
     ///
-    /// * `route` - The path to open it.
-    /// * `external_url` - The url to the external service where to proxy too.
-    /// * `response_codes` - The response code configuration.
-    /// * `domain` - Optional reference to the domain; if None, uses default domain.
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use sunweb::webserver::responses::StatusCode;
-    /// use webserver::{WebServer, ServerConfig, Domain, HTTPRequest, HTTPResponse};
-    /// let config = ServerConfig::new("127.0.0.1", 8080, "example.com");
-    /// let mut server = WebServer::new(config);
-    /// server.add_proxy_route("/", "https://github.com/Sunnickel", StatusCode::Ok, None);
-    /// ```
+    /// * `route` - URL path to match (e.g., "/api").
+    /// * `external` - Full external URL to forward the request to (e.g., "https://api.example.com").
+    /// * `response_codes` - Status code to respond with for successful proxying.
+    /// * `domain` - Optional domain reference; if `None`, the default domain is used.
     pub fn add_proxy_route(
         &mut self,
         route: &str,
@@ -505,25 +438,29 @@ impl WebServer {
         self
     }
 
-    /// A error page middleware function that allows to override 404 pages and more.
+    /// Internal middleware function for handling error pages.
+    ///
+    /// This function is used internally to override default error responses
+    /// with custom error pages if a matching route is registered.
     ///
     /// # Arguments
     ///
-    /// * `request` - Mutable reference to the incoming `HTTPRequest`.
-    /// * `response` - The `HTTPResponse` to be sent back.
-    /// * `routes` - The routes vector for the current domain.
+    /// * `_request` - Mutable reference to the incoming `HTTPRequest`.
+    /// * `response` - The `HTTPResponse` generated for the request.
+    /// * `routes` - All registered routes for the current domain.
     ///
     /// # Returns
     ///
-    /// The same `HTTPResponse` passed in, unchanged or a custom error page.
+    /// Returns the original `HTTPResponse` or a custom response if a matching error page route exists.
     ///
-    /// # Examples
+    /// # Note
     ///
-    /// This function is used internally to replace error code pages.
-    pub(crate) fn errorpage(
+    /// This function is `pub(crate)` and intended for internal server logic; users generally
+    /// do not call this directly.
+    pub(crate) fn error_page(
         _request: &mut HTTPRequest,
         response: HTTPResponse,
-        routes: &Vec<Route>,
+        routes: &[Route],
     ) -> HTTPResponse {
         let status_code = response.status_code;
 

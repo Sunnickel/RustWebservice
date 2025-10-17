@@ -1,46 +1,58 @@
+//! Middleware support for the web-server.
+//!
+//! Middleware can intercept and/or mutate requests and responses, either
+//! globally or only for specific domain + route patterns.
+//!
+//! # Example
+//!
+//! ```
+//! use webserver::{Domain, Middleware};
+//!
+//! // Add a request logger for every route under api.example.com
+//! let logger = Middleware::new_request(
+//!     Some(Domain::new("api.example.com")),
+//!     None,                       // any route
+//!     |req| eprintln!("→ {} {}", req.method, req.path),
+//! );
+//! ```
+use crate::webserver::Domain;
 use crate::webserver::requests::HTTPRequest;
 use crate::webserver::responses::HTTPResponse;
 use crate::webserver::route::Route;
-use crate::webserver::Domain;
 
-/// Represents a function that can be used as middleware in the web server.
+/// Signature bundle for every supported middleware flavour.
 ///
-/// This enum defines different types of middleware functions that can be applied
-/// to HTTPRequests, HTTPResponses, or both. Each variant corresponds to a specific
-/// middleware behavior:
-///
-/// - `HTTPRequest`: A function that modifies a mutable HTTPRequest.
-/// - `HTTPResponse`: A function that modifies a mutable HTTPResponse.
-/// - `BothHTTPResponse`: A function that takes a mutable HTTPRequest and an immutable HTTPResponse,
-///   and returns a modified HTTPResponse.
-/// - `Both`: Two separate functions, one for modifying HTTPRequests and one for HTTPResponses.
+/// Variants are deliberately *not* generic so the rest of the server can
+/// pattern-match over them without type gymnastics.
 pub enum MiddlewareFn {
+    /// `fn(&mut HTTPRequest)` – mutate the incoming request.
     HTTPRequest(fn(&mut HTTPRequest)),
+
+    /// `fn(&mut HTTPResponse)` – mutate the outgoing response.
     HTTPResponse(fn(&mut HTTPResponse)),
+
+    /// `fn(&mut Request, Response) -> Response` – decide which response to
+    /// send, optionally mutating the request on the way.
     BothHTTPResponse(fn(&mut HTTPRequest, HTTPResponse) -> HTTPResponse),
+
+    /// A pair of *pure* functions: `(Request -> Request, Response -> Response)`.
     Both(
         fn(HTTPRequest) -> HTTPRequest,
         fn(HTTPResponse) -> HTTPResponse,
     ),
-    HTTPResponseBothWithRoutes(fn(&mut HTTPRequest, HTTPResponse, &Vec<Route>) -> HTTPResponse),
+
+    /// Like `BothHTTPResponse` but the current route table is also provided.
+    HTTPResponseBothWithRoutes(fn(&mut HTTPRequest, HTTPResponse, &[Route]) -> HTTPResponse),
 }
 
-/// A middleware component that can be applied to HTTP HTTPRequests and HTTPResponses.
-///
-/// This struct holds the domain, route, and function associated with a middleware.
-/// It allows for flexible routing of middleware based on domain and route patterns.
+/// A middleware rule: domain pattern + route pattern + one of the functions
+/// above.
 pub struct Middleware {
-    /// The domain pattern this middleware applies to.
-    ///
-    /// If `None`, it defaults to "*" which matches all domains.
+    /// Domain that must match (or `*` for any).
     pub(crate) domain: Domain,
-
-    /// The route pattern this middleware applies to.
-    ///
-    /// If `None`, it defaults to "*" which matches all routes.
+    /// Route prefix that must match (or `*` for any).
     pub(crate) route: String,
-
-    /// The function that implements the middleware behavior.
+    /// Function(s) to execute.
     pub(crate) f: MiddlewareFn,
 }
 
@@ -66,8 +78,8 @@ impl Middleware {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::webserver::{Domain, Middleware};
-    /// use your_crate::webserver::HTTPRequests::HTTPRequest;
+    /// use sunweb::webserver::{Domain, Middleware};
+    /// use sunweb::webserver::HTTPRequests::HTTPRequest;
     ///
     /// fn modify_HTTPRequest(req: &mut HTTPRequest) {
     ///     // Modify HTTPRequest here
@@ -112,8 +124,8 @@ impl Middleware {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::webserver::{Domain, Middleware};
-    /// use your_crate::webserver::HTTPResponses::HTTPResponse;
+    /// use sunweb::webserver::{Domain, Middleware};
+    /// use sunweb::webserver::HTTPResponses::HTTPResponse;
     ///
     /// fn modify_HTTPResponse(res: &mut HTTPResponse) {
     ///     // Modify HTTPResponse here
@@ -159,9 +171,9 @@ impl Middleware {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::webserver::{Domain, Middleware};
-    /// use your_crate::webserver::HTTPRequests::HTTPRequest;
-    /// use your_crate::webserver::HTTPResponses::HTTPResponse;
+    /// use sunweb::webserver::{Domain, Middleware};
+    /// use sunweb::webserver::HTTPRequests::HTTPRequest;
+    /// use sunweb::webserver::HTTPResponses::HTTPResponse;
     ///
     /// fn modify_HTTPRequest(req: HTTPRequest) -> HTTPRequest {
     ///     // Modify HTTPRequest here
@@ -215,9 +227,9 @@ impl Middleware {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::webserver::{Domain, Middleware};
-    /// use your_crate::webserver::HTTPRequests::HTTPRequest;
-    /// use your_crate::webserver::HTTPResponses::HTTPResponse;
+    /// use sunweb::webserver::{Domain, Middleware};
+    /// use sunweb::webserver::HTTPRequests::HTTPRequest;
+    /// use sunweb::webserver::HTTPResponses::HTTPResponse;
     ///
     /// fn modify_HTTPRequest_and_HTTPResponse(req: &mut HTTPRequest, res: HTTPResponse) -> HTTPResponse {
     ///     // Modify HTTPRequest and HTTPResponse here
@@ -242,10 +254,12 @@ impl Middleware {
         }
     }
 
+    /// Like [`new_response_both`](Self::new_response_both) but the current
+    /// route table is also provided (useful for dynamic routing or logging).
     pub fn new_response_both_w_routes(
         domain: Option<Domain>,
         route: Option<String>,
-        f: fn(&mut HTTPRequest, HTTPResponse, &Vec<Route>) -> HTTPResponse,
+        f: fn(&mut HTTPRequest, HTTPResponse, &[Route]) -> HTTPResponse,
     ) -> Middleware {
         Self {
             domain: domain.unwrap_or_else(|| Domain::new("*")),
